@@ -113,7 +113,7 @@ class _SceneSlide extends StatefulWidget {
 }
 
 class _SceneSlideState extends State<_SceneSlide>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _ambient;
   late final AnimationController _zoom;
 

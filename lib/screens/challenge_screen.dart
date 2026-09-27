@@ -3,31 +3,47 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../data/game_data.dart';
-import '../data/india_states_geometry.dart';
-import '../data/progress_store.dart';
 import '../data/questions.dart';
 import '../models/question.dart';
 import '../widgets/particle_painter.dart';
 
-/// Full-screen quiz card — a beautiful question, four options, glowing
-/// correct / wrong feedback and live score updates. Answering unlocks the
-/// next state page (when the quiz belongs to a state).
-class QuizScreen extends StatefulWidget {
-  final String stateName;
-  final int bonus; // bonus score attached to this quiz tile
+/// The penalty applied when a challenge is answered wrongly.
+enum ChallengePenalty {
+  /// No penalty — the challenge was cleared.
+  none,
 
-  const QuizScreen({
-    super.key,
-    required this.stateName,
-    this.bonus = 0,
-  });
+  /// Move the player back 2 tiles.
+  backTwo,
 
-  @override
-  State<QuizScreen> createState() => _QuizScreenState();
+  /// Lose 5 points.
+  loseFive,
+
+  /// The player misses their next roll.
+  skipTurn,
 }
 
-class _QuizScreenState extends State<QuizScreen>
+/// Outcome returned to the board after the challenge closes.
+class ChallengeResult {
+  final bool correct;
+  final ChallengePenalty penalty;
+
+  const ChallengeResult({required this.correct, required this.penalty});
+}
+
+/// A Red-tile challenge: one random brain-teaser from a growing list of
+/// riddles, guess-the-state, guess-the-monument, true-or-false, pattern and
+/// unscramble mini-puzzles. Correct answers earn no penalty; wrong answers
+/// trigger a random penalty (back 2 tiles / lose 5 points / skip a turn).
+class ChallengeScreen extends StatefulWidget {
+  const ChallengeScreen({super.key});
+
+  @override
+  State<ChallengeScreen> createState() => _ChallengeScreenState();
+}
+
+class _ChallengeScreenState extends State<ChallengeScreen>
     with SingleTickerProviderStateMixin {
+  final math.Random _rng = math.Random();
   late final Question _question;
   late final AnimationController _popIn;
   int? _picked;
@@ -36,45 +52,11 @@ class _QuizScreenState extends State<QuizScreen>
   @override
   void initState() {
     super.initState();
-    _question = _selectQuestion();
+    _question = _buildChallenge();
     _popIn = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 700),
     )..forward();
-  }
-
-  /// Picks a question for the quiz tile: prefer one this journey has NOT
-  /// asked yet (questions differ every visit), falling back to a random one
-  /// when the pool is exhausted, then remember it so repeats stay fresh.
-  Question _selectQuestion() {
-    final pool = allQuestions
-        .where((q) => q.state == widget.stateName)
-        .toList()
-      ..shuffle(math.Random());
-    final generic = widget.stateName == "India"
-        ? allQuestions.where((q) => q.state == "India").toList()
-        : <Question>[];
-    final candidates = pool.isNotEmpty
-        ? pool
-        : generic.isNotEmpty
-            ? generic
-            : [_fallbackQuestion()];
-    final unused = candidates
-        .where((q) => !GameData.usedQuestions.contains(q.question))
-        .toList();
-    final chosen = unused.isNotEmpty ? unused.first : candidates.first;
-    GameData.usedQuestions.add(chosen.question);
-    return chosen;
-  }
-
-  Question _fallbackQuestion() {
-    return const Question(
-      state: "India",
-      category: "General",
-      question: "Which is the national bird of India?",
-      options: ["Peacock", "Parrot", "Sparrow", "Crow"],
-      answer: 0,
-    );
   }
 
   @override
@@ -83,34 +65,135 @@ class _QuizScreenState extends State<QuizScreen>
     super.dispose();
   }
 
+  /// Picks a random challenge and builds its MCQ. Registers the question text
+  /// in [GameData.usedQuestions] so the same brain-teaser is not asked again
+  /// within one journey.
+  Question _buildChallenge() {
+    switch (_rng.nextInt(5)) {
+      case 0:
+        final q = _unusedPick(challengePool) ?? challengePool.first;
+        GameData.usedQuestions.add(q.question);
+        return q;
+      case 1:
+        return _guessState();
+      case 2:
+        return _trueOrFalse();
+      case 3:
+        return _unscramble();
+      default:
+        return _guessMonument();
+    }
+  }
+
+  Question? _unusedPick(List<Question> pool) {
+    final shuffled = pool.toList()..shuffle(_rng);
+    for (final q in shuffled) {
+      if (!GameData.usedQuestions.contains(q.question)) return q;
+    }
+    return null;
+  }
+
+  ({List<String> options, int answer}) _fourOptions(List<String> distractors) {
+    final correct = distractors.first;
+    final pool = distractors.skip(1).toList()..shuffle(_rng);
+    final options = <String>[correct];
+    for (final o in pool) {
+      if (!options.contains(o)) options.add(o);
+      if (options.length == 4) break;
+    }
+    options.shuffle(_rng);
+    return (options: options, answer: options.indexOf(correct));
+  }
+
+  Question _guessState() {
+    final pair = monumentStatePairs[_rng.nextInt(monumentStatePairs.length)];
+    final built = _fourOptions([
+      pair.$2,
+      ...stateNames.where((s) => s != pair.$2),
+    ]);
+    final q = Question(
+      state: pair.$2,
+      category: "Guess the State",
+      question: "The monument «${pair.$1}» stands in which state?",
+      options: built.options,
+      answer: built.answer,
+    );
+    GameData.usedQuestions.add(q.question);
+    return q;
+  }
+
+  Question _guessMonument() {
+    final pair = monumentStatePairs[_rng.nextInt(monumentStatePairs.length)];
+    final distractors = monumentStatePairs
+        .map((p) => p.$1)
+        .where((m) => m != pair.$1)
+        .toList();
+    final built = _fourOptions([pair.$1, ...distractors]);
+    final q = Question(
+      state: pair.$2,
+      category: "Guess the Monument",
+      question: "Which monument is a treasure of ${pair.$2}?",
+      options: built.options,
+      answer: built.answer,
+    );
+    GameData.usedQuestions.add(q.question);
+    return q;
+  }
+
+  Question _trueOrFalse() {
+    final q = _unusedPick(trueFalsePool) ?? trueFalsePool.first;
+    GameData.usedQuestions.add(q.question);
+    return q;
+  }
+
+  Question _unscramble() {
+    final name = stateNames[_rng.nextInt(stateNames.length)];
+    final letters = name.replaceAll(' ', '').split('')..shuffle(_rng);
+    final built =
+        _fourOptions([name, ...stateNames.where((s) => s != name)]);
+    final q = Question(
+      state: name,
+      category: "Unscramble",
+      question: "Unscramble the state name: ${letters.join().toUpperCase()}",
+      options: built.options,
+      answer: built.answer,
+    );
+    GameData.usedQuestions.add(q.question);
+    return q;
+  }
+
+  ChallengePenalty get _rollPenalty {
+    switch (_rng.nextInt(3)) {
+      case 0:
+        return ChallengePenalty.backTwo;
+      case 1:
+        return ChallengePenalty.loseFive;
+      default:
+        return ChallengePenalty.skipTurn;
+    }
+  }
+
   void _answer(int i) {
     if (_answered) return;
     setState(() {
       _answered = true;
       _picked = i;
-      final correct = i == _question.answer;
-      if (correct) {
-        GameData.score += 10 + widget.bonus;
-        GameData.correctAnswers++;
-      } else {
-        GameData.wrongAnswers++;
-      }
     });
-    ProgressStore.save();
+    if (i == _question.answer) {
+      GameData.correctAnswers++;
+    } else {
+      GameData.wrongAnswers++;
+    }
   }
 
   void _finish() {
-    // Root-cause fix for "quiz return": the quiz must simply CLOSE and return
-    // to the very same BoardScreen that pushed it (the Board route below is
-    // still alive, so player position, score, visited states, answered quiz
-    // counters and level are all preserved). Do NOT push or replace with any
-    // other screen here — no Login, Story, Home, or India Map.
-    final st = stateByName(widget.stateName);
-    if (st != null) {
-      GameData.markStateVisited(st.name);
-      ProgressStore.save();
-    }
-    Navigator.of(context).pop();
+    final isCorrect = _picked == _question.answer;
+    Navigator.of(context).pop(
+      ChallengeResult(
+        correct: isCorrect,
+        penalty: isCorrect ? ChallengePenalty.none : _rollPenalty,
+      ),
+    );
   }
 
   @override
@@ -119,14 +202,14 @@ class _QuizScreenState extends State<QuizScreen>
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF1A0B38), Color(0xFF2D1B69), Color(0xFF3E2F7D)],
+            colors: [Color(0xFF4A1307), Color(0xFF7B1F0F), Color(0xFF3E1002)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
         ),
         child: Stack(
           children: [
-            const FloatingParticles(particleCount: 30),
+            const FloatingParticles(particleCount: 22),
             SafeArea(
               child: Center(
                 child: SingleChildScrollView(
@@ -145,7 +228,7 @@ class _QuizScreenState extends State<QuizScreen>
                         children: [
                           _header(),
                           const SizedBox(height: 16),
-                          _questionCard(),
+                          _card(),
                         ],
                       ),
                     ),
@@ -167,11 +250,37 @@ class _QuizScreenState extends State<QuizScreen>
           shape: const CircleBorder(),
           child: InkWell(
             customBorder: const CircleBorder(),
-            onTap: () => Navigator.of(context).pop(),
+            onTap: () => Navigator.of(context).pop(
+              const ChallengeResult(correct: false, penalty: ChallengePenalty.none),
+            ),
             child: const Padding(
               padding: EdgeInsets.all(10),
               child: Icon(Icons.close_rounded, color: Colors.white, size: 22),
             ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.bolt_rounded, color: Color(0xFFFFD54F), size: 20),
+              SizedBox(width: 6),
+              Text(
+                "CHALLENGE",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 2,
+                ),
+              ),
+            ],
           ),
         ),
         const Spacer(),
@@ -180,11 +289,7 @@ class _QuizScreenState extends State<QuizScreen>
           children: [
             const Text(
               "SCORE",
-              style: TextStyle(
-                color: Colors.white54,
-                fontSize: 11,
-                letterSpacing: 2,
-              ),
+              style: TextStyle(color: Colors.white54, fontSize: 11, letterSpacing: 2),
             ),
             Text(
               '${GameData.score}',
@@ -200,7 +305,7 @@ class _QuizScreenState extends State<QuizScreen>
     );
   }
 
-  Widget _questionCard() {
+  Widget _card() {
     return Container(
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
@@ -239,7 +344,7 @@ class _QuizScreenState extends State<QuizScreen>
             _question.question,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 21,
+              fontSize: 20,
               fontWeight: FontWeight.w800,
               height: 1.35,
             ),
@@ -279,14 +384,9 @@ class _QuizScreenState extends State<QuizScreen>
       bg = Colors.white.withValues(alpha: 0.08);
     }
 
-    final wrongShake = _answered && isPicked && !isAnswer;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 280),
       curve: Curves.easeOut,
-      transform: wrongShake
-          ? Matrix4.translationValues(
-              6 * math.sin(3 * 3.14159 * _popIn.value + i), 0, 0)
-          : Matrix4.identity(),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
@@ -316,7 +416,7 @@ class _QuizScreenState extends State<QuizScreen>
                   _question.options[i],
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 16,
+                    fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -355,7 +455,7 @@ class _QuizScreenState extends State<QuizScreen>
       child: Row(
         children: [
           Icon(
-            correct ? Icons.emoji_events_rounded : Icons.menu_book_rounded,
+            correct ? Icons.shield_rounded : Icons.warning_amber_rounded,
             color: Colors.white,
             size: 30,
           ),
@@ -363,8 +463,8 @@ class _QuizScreenState extends State<QuizScreen>
           Expanded(
             child: Text(
               correct
-                  ? "Correct! +${10 + widget.bonus} points"
-                  : "Not quite — the answer is ${_question.options[_question.answer]}.",
+                  ? "Challenge cleared! Correct — no penalty. 💪"
+                  : "Oops! The answer was ${_question.options[_question.answer]}.",
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 15,
@@ -378,14 +478,17 @@ class _QuizScreenState extends State<QuizScreen>
   }
 
   Widget _continueButton() {
+    final correct = _picked == _question.answer;
     return SizedBox(
       width: double.infinity,
       height: 54,
       child: DecoratedBox(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(28),
-          gradient: const LinearGradient(
-            colors: [Color(0xFFFF9933), Color(0xFF138808)],
+          gradient: LinearGradient(
+            colors: correct
+                ? const [Color(0xFF2E7D32), Color(0xFF1B5E20)]
+                : const [Color(0xFF455A64), Color(0xFF263238)],
           ),
         ),
         child: Material(
@@ -393,14 +496,14 @@ class _QuizScreenState extends State<QuizScreen>
           child: InkWell(
             borderRadius: BorderRadius.circular(28),
             onTap: _finish,
-            child: const Center(
+            child: Center(
               child: Text(
-                "CONTINUE",
-                style: TextStyle(
+                correct ? "NO PENALTY · CLAIM" : "ACCEPT PENALTY",
+                style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 16,
+                  fontSize: 15,
                   fontWeight: FontWeight.w900,
-                  letterSpacing: 3,
+                  letterSpacing: 2,
                 ),
               ),
             ),

@@ -26,7 +26,7 @@ class StateDetailScreen extends StatefulWidget {
 }
 
 class _StateDetailScreenState extends State<StateDetailScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _ambient;
   late final AnimationController _reveal;
 

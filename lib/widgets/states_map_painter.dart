@@ -25,6 +25,21 @@ Map<String, Path> buildStatePaths(double size) {
   return result;
 }
 
+/// The national silhouette of India (closed) at a given square [size].
+Path buildIndiaOutlinePath(double size) {
+  final path = Path();
+  for (var i = 0; i < indiaOutline.length; i++) {
+    final o = Offset(indiaOutline[i].dx * size, indiaOutline[i].dy * size);
+    if (i == 0) {
+      path.moveTo(o.dx, o.dy);
+    } else {
+      path.lineTo(o.dx, o.dy);
+    }
+  }
+  path.close();
+  return path;
+}
+
 /// Pre-computed centroids (used to position state name labels).
 Map<String, Offset> stateCentroids(double size) {
   final result = <String, Offset>{};
@@ -43,19 +58,25 @@ Map<String, Offset> stateCentroids(double size) {
   return result;
 }
 
-/// A proper, clickable India map where every state is a real polygon with a
-/// visible name. States glow amber when hovered / selected; visited states
-/// are fully lit with a check; heritage cities show as gold stars.
+/// A premium, clickable India map. The country is drawn from the real
+/// national outline with an elegant blue→green gradient, a thin glowing
+/// border and a soft drop shadow. Every state stays individually clickable
+/// and glows on hover / selection. Visited states are fully lit with a
+/// check; famous cities pulse gently as location pins.
 class StatesMapPainter extends CustomPainter {
   final double size;
   final Set<String> visitedStates;
   final String? hoverName;
   final String? selectedName;
   final double reveal; // 0..1 draw-in progress
+  final double pulse; // 0..1 pin pulse phase
+  final double px; // device pixels for crisp strokes
 
   const StatesMapPainter({
     required this.size,
     required this.visitedStates,
+    required this.px,
+    this.pulse = 0.0,
     this.hoverName,
     this.selectedName,
     this.reveal = 1.0,
@@ -72,154 +93,202 @@ class StatesMapPainter extends CustomPainter {
   void paint(Canvas canvas, Size canvasSize) {
     final w = canvasSize.width;
     final h = canvasSize.height;
+    final outline = buildIndiaOutlinePath(w);
 
-    // ---- Ocean / backboard ----
-    final bg = Rect.fromLTWH(0, 0, w, h);
+    // ---- Ocean backdrop ----
+    final bg = Rect.fromLTWH(-30, -30, w + 60, h + 60);
     canvas.drawRect(
       bg,
+      Paint()
+        ..shader = const RadialGradient(
+          center: Alignment(0, 0.1),
+          radius: 1.1,
+          colors: [
+            Color(0x8849C2F0),
+            Color(0x2223A6D3),
+            Color(0x000D6E8C),
+          ],
+          stops: [0.0, 0.62, 1.0],
+        ).createShader(bg.translate(0, h * 0.02)),
+    );
+
+    // ---- Soft drop shadow behind the country ----
+    canvas.drawPath(
+      outline.shift(Offset(0, h * 0.014)),
+      Paint()
+        ..color = const Color(0xFF06314D).withValues(alpha: 0.32)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16),
+    );
+
+    // ---- Country silhouette with an elegant blue→green gradient ----
+    canvas.drawPath(
+      outline,
       Paint()
         ..shader = const LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFF123C61), Color(0xFF0D2E4C), Color(0xFF08203A)],
-        ).createShader(bg),
+          colors: [Color(0xFF0C4C8C), Color(0xFF1580A8), Color(0xFF27A874)],
+          stops: [0.0, 0.48, 1.0],
+        ).createShader(Rect.fromLTWH(0, 0, w, h)),
     );
 
-    // Radial sea glow.
-    canvas.drawCircle(
-      Offset(w / 2, h * 0.48),
-      w * 0.52,
+    // Subtle top-light across the whole country.
+    canvas.save();
+    canvas.clipPath(outline);
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, w, h),
       Paint()
-        ..shader = RadialGradient(
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
           colors: [
-            const Color(0xFF2E7CC0).withValues(alpha: 0.30),
-            const Color(0xFF2E7CC0).withValues(alpha: 0),
+            Colors.white.withValues(alpha: 0.14),
+            Colors.white.withValues(alpha: 0.02),
+            Colors.white.withValues(alpha: 0.05),
           ],
-        ).createShader(Rect.fromCircle(center: Offset(w / 2, h * 0.48), radius: w * 0.55)),
+          stops: const [0.0, 0.5, 0.9],
+        ).createShader(Rect.fromLTWH(0, 0, w, h)),
     );
 
     final paths = buildStatePaths(w);
     final centroids = stateCentroids(w);
 
-    // Soft silhouette shadow behind the whole country (blurred union).
-    final shadowPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.35)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18);
-    for (final p in paths.values) {
-      canvas.drawPath(p.shift(const Offset(0, 7)), shadowPaint);
-    }
-
-    // ---- States ----
+    // ---- States (clipped inside the national outline) ----
     for (final shape in indiaStateShapes) {
       final path = paths[shape.name];
-      if (path == null) continue;
+      if (path == null || !outline.getBounds().overlaps(path.getBounds())) {
+        continue;
+      }
       final state = stateByName(shape.name);
       if (state == null) continue;
 
       final isVisited = visitedStates.contains(state.name);
       final isFocused = hoverName == state.name || selectedName == state.name;
-      final base = _regionColor(state);
+      final region = _regionColor(state);
 
       // Glow ring for the focused state.
       if (isFocused) {
-        canvas.save();
-        canvas.clipPath(path);
         canvas.drawPath(
           path,
           Paint()
-            ..color = const Color(0xFFFFB300).withValues(alpha: 0.5)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 26),
-        );
-        canvas.restore();
-        canvas.drawPath(
-          path.shift(const Offset(-1.5, -1.5)),
-          Paint()
-            ..color = Colors.white.withValues(alpha: 0.6)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 2,
+            ..color = const Color(0xFFFFB300).withValues(alpha: 0.55)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 24),
         );
       }
 
-      final fillColor = isVisited
-          ? base
-          : Color.lerp(base, Colors.black, 0.30)!;
+      final fill = Color.lerp(region, Colors.white, isVisited ? 0.62 : 0.38)!;
+      final alpha = isVisited ? 0.62 : (isFocused ? 0.55 : 0.38);
+      canvas.drawPath(path, Paint()..color = fill.withValues(alpha: alpha));
+
+      // Seam-seal stroke (same colour as the fill) so neighbouring states
+      // never show hairline gaps.
       canvas.drawPath(
         path,
-        Paint()..color = fillColor.withValues(alpha: isVisited ? 0.96 : 0.82),
+        Paint()
+          ..color = fill.withValues(alpha: (isVisited ? 0.85 : 0.6))
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = math.max(1.1, 1.6 * px),
       );
 
-      // Inner shading.
+      // Inner boundary shading.
       canvas.drawPath(
         path,
         Paint()
-          ..color = Colors.black.withValues(alpha: 0.25)
+          ..color = const Color(0xFF062B44).withValues(alpha: 0.30)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.4,
+          ..strokeWidth = 0.8 * px,
       );
-      canvas.drawPath(
-        path,
-        Paint()
-          ..color = Colors.white.withValues(alpha: isFocused ? 0.9 : 0.55)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = (isFocused ? 2.4 : 1.4),
-      );
+
+      if (isFocused) {
+        canvas.drawPath(
+          path,
+          Paint()
+            ..color = Colors.white.withValues(alpha: 0.95)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.4 * px,
+        );
+      }
 
       // Check for visited states.
       if (isVisited) {
         final c = centroids[shape.name]!;
-        _drawCheck(canvas, Offset(c.dx, c.dy - size * 0.028), size * 0.016);
+        _drawCheck(canvas, c, w * 0.011);
       }
     }
+    canvas.restore(); // un-clip the outline
 
-    // ---- State names ----
+    // ---- Glowing national border ----
+    canvas.drawPath(
+      outline,
+      Paint()
+        ..color = const Color(0xFF9BE8FF).withValues(alpha: 0.55)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 6
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+    );
+    canvas.drawPath(
+      outline,
+      Paint()
+        ..color = const Color(0xFF0A3350).withValues(alpha: 0.85)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0 * px,
+    );
+    canvas.drawPath(
+      outline,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.75)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0 * px,
+    );
+
+    // ---- State labels (focused + visited only, keeps the map clean) ----
     for (final shape in indiaStateShapes) {
       final state = stateByName(shape.name);
       if (state == null) continue;
-      final c = centroids[shape.name]!;
-      final isFocused = hoverName == state.name || selectedName == state.name;
+      final focused = hoverName == state.name || selectedName == state.name;
       final visited = visitedStates.contains(state.name);
+      if (!focused && !visited) continue;
 
-      final base = size.clamp(260.0, 640.0);
-      var fontSize = base * 0.0215;
-      if (isFocused) fontSize = (fontSize * 1.15).clamp(10.0, 15.0);
-
+      final c = centroids[shape.name]!;
+      var fontSize = (w.clamp(240.0, 620.0)) * 0.019;
+      if (focused) fontSize = (fontSize * 1.18).clamp(10.0, 15.0);
       _drawLabel(
         canvas,
         shape.name,
         c,
         fontSize,
-        isFocused
+        focused
             ? const Color(0xFFFFE082)
-            : visited
-                ? Colors.white
-                : const Color(0xFFFFF3E0),
-        highlight: isFocused,
+            : Colors.white.withValues(alpha: 0.92),
+        highlight: focused,
       );
     }
 
-    // ---- Heritage pins ----
+    // ---- Heritage location pins (gently pulse) ----
     for (final pin in indiaHeritagePins) {
       final center = Offset(pin.normalized.dx * w, pin.normalized.dy * h);
-      final isFocused = hoverName == pin.name || selectedName == pin.name;
-      final r = size * (isFocused ? 0.018 : 0.014);
-
-      _drawStar(canvas, center, r, isFocused ? const Color(0xFFFFE082) : const Color(0xFFFFB300));
+      final focused =
+          hoverName == shapeLabel(pin) || selectedName == shapeLabel(pin);
+      final r = math.max(5.0, w * 0.014);
+      _drawPin(canvas, center, r, pulse, focused);
 
       _drawLabel(
         canvas,
         pin.name,
-        Offset(center.dx, center.dy + r + size * 0.028),
-        isFocused ? 12.5 : 11.0,
-        isFocused ? const Color(0xFFFFE082) : Colors.white,
-        highlight: isFocused,
+        Offset(center.dx, center.dy + r * 1.7 + w * 0.016),
+        focused ? 12.0 : 10.5,
+        focused ? const Color(0xFFFFE082) : Colors.white70,
+        highlight: focused,
       );
     }
   }
 
+  String shapeLabel(HeritagePin pin) => pin.state ?? pin.name;
+
   void _drawCheck(Canvas canvas, Offset c, double r) {
     canvas.drawCircle(
       c,
-      r * 1.7,
+      r * 1.9,
       Paint()
         ..color = Colors.white.withValues(alpha: 0.95)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
@@ -228,7 +297,7 @@ class StatesMapPainter extends CustomPainter {
       text: TextSpan(
         text: "✓",
         style: TextStyle(
-          fontSize: r * 2.6,
+          fontSize: r * 3.2,
           fontWeight: FontWeight.w900,
           color: const Color(0xFF2E7D32),
         ),
@@ -254,48 +323,71 @@ class StatesMapPainter extends CustomPainter {
           fontWeight: highlight ? FontWeight.w900 : FontWeight.w600,
           color: color,
           shadows: [
-            Shadow(color: Colors.black.withValues(alpha: 0.9), blurRadius: 4, offset: const Offset(0, 1)),
+            Shadow(
+              color: const Color(0xFF062B44).withValues(alpha: 0.9),
+              blurRadius: 4,
+              offset: const Offset(0, 1),
+            ),
           ],
         ),
       ),
+      maxLines: 1,
       textDirection: TextDirection.ltr,
     )..layout();
     tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
   }
 
-  void _drawStar(Canvas canvas, Offset c, double r, Color color) {
-    final path = Path();
-    for (int i = 0; i < 10; i++) {
-      final angle = -math.pi / 2 + i * math.pi / 5;
-      final rad = i.isEven ? r : r * 0.45;
-      final p = Offset(c.dx + math.cos(angle) * rad, c.dy + math.sin(angle) * rad);
-      if (i == 0) {
-        path.moveTo(p.dx, p.dy);
-      } else {
-        path.lineTo(p.dx, p.dy);
-      }
-    }
-    path.close();
-    canvas.drawPath(
-      path,
+  void _drawPin(Canvas canvas, Offset c, double r, double pulse, bool focused) {
+    final halo = r * (1.55 + 0.35 * math.sin(2 * math.pi * pulse));
+    canvas.drawCircle(
+      c + Offset(0, r * 0.2),
+      halo,
       Paint()
-        ..color = color
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+        ..color = (focused ? const Color(0xFFFFC107) : const Color(0xFFFFFFFF))
+            .withValues(alpha: focused ? 0.35 : 0.25)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
     );
-    canvas.drawPath(path, Paint()..color = color);
+
+    // Teardrop body.
+    final body = Path()
+      ..moveTo(c.dx, c.dy - r)
+      ..quadraticBezierTo(c.dx + r * 1.15, c.dy + r * 0.35, c.dx, c.dy + r * 1.25)
+      ..quadraticBezierTo(c.dx - r * 1.15, c.dy + r * 0.35, c.dx, c.dy - r)
+      ..close();
+
+    final bodyColors = focused
+        ? const [Color(0xFFFFC844), Color(0xFFFF6F00)]
+        : const [Color(0xFFFEFEFE), Color(0xFF9BE8FF)];
+    final bodyPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: bodyColors,
+      ).createShader(Rect.fromCircle(center: c, radius: r * 1.4));
+    canvas.drawPath(body, bodyPaint);
     canvas.drawPath(
-      path,
+      body,
       Paint()
-        ..color = Colors.white.withValues(alpha: 0.7)
+        ..color = const Color(0xFF062B44).withValues(alpha: 0.55)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 0.8,
+        ..strokeWidth = 1.0,
+    );
+
+    // Dot on top.
+    canvas.drawCircle(
+      c + Offset(0, -r * 0.42),
+      r * 0.42,
+      Paint()
+        ..color = focused ? const Color(0xFFFFF3E0) : const Color(0xFFE3F6FF),
     );
   }
 
   @override
   bool shouldRepaint(covariant StatesMapPainter oldDelegate) =>
       oldDelegate.size != size ||
+      oldDelegate.px != px ||
       oldDelegate.reveal != reveal ||
+      oldDelegate.pulse != pulse ||
       oldDelegate.hoverName != hoverName ||
       oldDelegate.selectedName != selectedName ||
       oldDelegate.visitedStates != visitedStates;

@@ -43,3 +43,36 @@ ExplorerTitle getTitleForScore(int totalScore) {
   }
   return explorerTitles.first;
 }
+
+/// Explorer rank ladder used by the Snake-and-Ladder board and its
+/// Journey Complete screen. Ranks are awarded from the live run [score].
+class ExplorerRank {
+  final String name;
+  final String emoji;
+  final int minScore;
+
+  const ExplorerRank({
+    required this.name,
+    required this.emoji,
+    required this.minScore,
+  });
+}
+
+const List<ExplorerRank> explorerRanks = [
+  ExplorerRank(name: "Beginner Explorer", emoji: "🥾", minScore: 0),
+  ExplorerRank(name: "State Traveller", emoji: "🧭", minScore: 51),
+  ExplorerRank(name: "India Explorer", emoji: "🚩", minScore: 121),
+  ExplorerRank(name: "Bharat Adventurer", emoji: "🎒", minScore: 221),
+  ExplorerRank(name: "Master Explorer", emoji: "🏅", minScore: 351),
+  ExplorerRank(name: "Legend of India", emoji: "👑", minScore: 501),
+];
+
+/// Returns the highest rank whose [score] threshold has been reached.
+ExplorerRank rankForScore(int score) {
+  for (int i = explorerRanks.length - 1; i >= 0; i--) {
+    if (score >= explorerRanks[i].minScore) {
+      return explorerRanks[i];
+    }
+  }
+  return explorerRanks.first;
+}

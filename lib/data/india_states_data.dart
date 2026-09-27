@@ -43,6 +43,20 @@ const List<IndiaState> indiaStates = [
   ),
 
   IndiaState(
+    name: "Ladakh",
+    capital: "Leh",
+    food: "Skyu & Gur Gur Chai",
+    language: "Ladakhi",
+    monument: "Pangong Tso",
+    facts: [
+      "Ladakh is one of the highest inhabited plateaus in the world.",
+      "Pangong Lake changes colour from blue to green to red.",
+    ],
+    mapPosition: Offset(0.38, 0.06),
+    region: "North India",
+  ),
+
+  IndiaState(
     name: "Punjab",
     capital: "Chandigarh",
     food: "Makki di Roti & Sarson da Saag",
@@ -53,6 +67,20 @@ const List<IndiaState> indiaStates = [
       "Punjab is called the 'Granary of India' for its huge wheat production.",
     ],
     mapPosition: Offset(0.32, 0.09),
+    region: "North India",
+  ),
+
+  IndiaState(
+    name: "Chandigarh",
+    capital: "Chandigarh",
+    food: "Chole Kulche & Kulfi",
+    language: "Hindi, Punjabi",
+    monument: "Rock Garden",
+    facts: [
+      "Chandigarh was designed by the famous architect Le Corbusier.",
+      "It is the joint capital of Punjab and Haryana.",
+    ],
+    mapPosition: Offset(0.30, 0.16),
     region: "North India",
   ),
 

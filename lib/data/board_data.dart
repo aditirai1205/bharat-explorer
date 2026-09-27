@@ -40,6 +40,10 @@ class BoardTile {
 const int boardColumns = 6;
 const int boardRows = 6;
 
+/// The winning square — tile 36 lives at grid index 0 (top-left) and is
+/// `board.first`, NOT `board.last` (which is tile 6).
+const int finishTile = 36;
+
 /// Tile numbers in grid order (index 0 = top-left), snaking down to 1.
 const List<int> board = [
   36, 35, 34, 33, 32, 31,
