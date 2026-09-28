@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../data/badges_data.dart';
 import '../data/board_data.dart';
+import '../data/collectibles_data.dart';
 import '../data/game_data.dart';
 import '../data/india_states_data.dart';
 import '../data/india_states_geometry.dart';
@@ -12,24 +13,25 @@ import '../data/journeys_data.dart';
 import '../data/progress_store.dart';
 import '../data/questions.dart';
 import '../data/titles.dart';
+import '../data/tour_stages.dart';
 import '../models/question.dart';
 import '../widgets/board_background.dart';
 import '../widgets/board_fx.dart';
 import '../widgets/board_overlay_painter.dart';
 import '../widgets/dice.dart';
 import '../widgets/explorer.dart';
-import 'challenge_screen.dart';
 import 'lucky_wheel_screen.dart';
 import 'map_screen.dart';
 import 'mini_game_screen.dart';
 import 'passport_book_screen.dart';
 import 'passport_screen.dart';
 import 'quiz_screen.dart';
+import 'treasure_event_screen.dart';
 
 /// The Snake-and-Ladder adventure across 36 squares, drawn inside a heavy
 /// wooden frame on a hand-painted treasure map.
 ///
-/// Blue = Quiz, Green = Bonus, Yellow = Treasure, Red = Challenge,
+/// Blue = Quiz, Green = Challenge, Red = Penalty, Yellow = Treasure,
 /// White = Normal. This screen adopts [TickerProviderStateMixin] (the plural
 /// mixin) because it drives several [AnimationController]s at once — using
 /// `SingleTickerProviderStateMixin` here is what caused the
@@ -51,14 +53,33 @@ class _BoardScreenState extends State<BoardScreen>
   bool _skipNextTurn = false;
   String _message = "";
 
+  /// Snakes and ladders for THIS board run — a fresh layout every journey.
+  late JourneyBoard _runBoard;
+
+  /// Run-local power-ups from the Green Lucky Box.
+  bool _shield = false;
+  bool _skipSnake = false;
+  bool _doubleSnake = false;
+  bool _extraDice = false;
+
+  /// Smooth snake-slide / ladder-climb animation.
+  late final AnimationController _slideCtrl;
+  int? _slideFrom;
+  int? _slideTo;
+  bool _slideIsSnake = false;
+  double _slideAmplitude = 0.2;
+
+  /// Golden pulse fired while the explorer stands on a Treasure tile.
+  late final AnimationController _treasureGlow;
+
   /// White tiles secretly chosen as Mystery Surprise squares this journey.
   /// Their colour never changes, but landing on one fires a random reward.
   late List<int> _mysteryTiles = const [];
 
-  /// Adventure (white) squares that are reachable FINAL resting tiles
-  /// (they are neither start, finish, snake/ladder start nor quiz/bonus/
-  /// treasure/challenge). Two are drawn per journey for replay variety.
-  static const List<int> _mysteryCandidates = [8, 10, 17, 21];
+  /// Adventure (white) squares that are safe final RESTING tiles (not a
+  /// snake head/tail or ladder base/top on the classic board). Two are drawn
+  /// per journey for replay variety.
+  static const List<int> _mysteryCandidates = [1, 3, 21];
 
   late final AnimationController _confetti;
   late final AnimationController _snake;
@@ -72,19 +93,27 @@ class _BoardScreenState extends State<BoardScreen>
   @override
   void initState() {
     super.initState();
-    // New journey: reset all run-local counters (score, rolls, chutes used,
-    // quizzes, states visited this run) and stamp the starting time. Global
-    // lifetime stats (totalScore, collections, badges, journey unlocks)
-    // survive, so the player truly continues their adventure across sessions.
-    GameData.resetJourney();
+    // Resume or fresh run: `GameData.startJourney()` decides the semantics —
+    // re-tapping the SAME journey continues the saved run (tile + score +
+    // stage intact), anything else starts a brand-new one. The auto-save
+    // system keeps every landing, score, coin and stamp persisted, so the
+    // token simply opens where the last session left off.
     GameData.ensureDailyMission();
-    _rollMysteryTiles();
+    _runBoard = classicBoard;
+    // Restore the run EXACTLY: the same mystery-surprise squares as the board
+    // the explorer left (fresh ones are only rolled for a brand-new run).
+    if (GameData.mysteryTiles.length == 2) {
+      _mysteryTiles = List.of(GameData.mysteryTiles);
+    } else {
+      _rollMysteryTiles();
+    }
     _message = _journeyStartMessage();
-    // Game-logic guarantee: every new game starts on Tile 1. Nothing else in
-    // the project writes or restores a player position, so this is the only
-    // place an initial value exists (searched: playerPosition, currentTile,
-    // currentIndex, playerIndex, tileIndex, currentPosition — none found).
-    _player = 1;
+    // Continue from the saved square (a fresh run sits on tile 1).
+    _player = GameData.currentTile.clamp(1, finishTile).toInt();
+    // Uneven perks earned before closing survive the restart too.
+    _shield = GameData.shieldReady;
+    _skipSnake = false;
+    _extraDice = GameData.extraDiceReady;
     _confetti = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 750),
@@ -105,19 +134,39 @@ class _BoardScreenState extends State<BoardScreen>
           setState(() => _stampName = null);
         }
       });
+    _slideCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    _treasureGlow = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 750),
+    );
   }
 
   /// Journey-themed opening message: which territory + today's mission.
   String _journeyStartMessage() {
     final j = GameData.journey;
     final m = GameData.dailyMission;
-    return '${j.emoji} ${j.name} Journey — reach tile 36 to win! '
+    return '${j.emoji} ${j.name} Journey — master all 4 regional missions '
+        'and reach tile 36 to win! '
         'Mission: ${m.emoji} ${m.title} (${GameData.dailyMissionProgress}/${m.goal})';
   }
 
   void _rollMysteryTiles() {
     final pool = [..._mysteryCandidates]..shuffle(_rng);
-    _mysteryTiles = pool.take(2).toList();
+    GameData.mysteryTiles = pool.take(2).toList();
+    _mysteryTiles = List.of(GameData.mysteryTiles);
+  }
+
+  /// Starts the token's hop from a clean slate: `_bounce` is explicitly
+  /// stopped and reset to 0 before running, so it is never asked to animate
+  /// while it is already running and its progress always stays in 0..1.
+  void _startBounce() {
+    _bounce
+      ..stop()
+      ..value = 0
+      ..forward();
   }
 
   @override
@@ -126,6 +175,8 @@ class _BoardScreenState extends State<BoardScreen>
     _snake.dispose();
     _bounce.dispose();
     _stampCtrl.dispose();
+    _slideCtrl.dispose();
+    _treasureGlow.dispose();
     super.dispose();
   }
 
@@ -149,14 +200,19 @@ class _BoardScreenState extends State<BoardScreen>
 
   Future<void> _roll() async {
     if (_busy) return;
+    await _performRoll();
+  }
 
-    // Red-tile challenge penalty: the explorer misses this whole turn. Tapping
+  /// The actual dice-turn. Refactored out of [_roll] so the Green Lucky Box
+  /// can grant an automatic EXTRA ROLL once the current turn fully resolves.
+  Future<void> _performRoll() async {
+    // Red-tile penalty: the explorer misses this whole turn. Tapping
     // the dice consumes the turn and simply shows the reason.
     if (_skipNextTurn) {
       setState(() {
         _skipNextTurn = false;
         _busy = true;
-        _message = "That challenge cost you the turn! Tap the dice again.";
+        _message = "That penalty cost you the turn! Tap the dice again.";
       });
       await Future<void>.delayed(const Duration(milliseconds: 900));
       if (!mounted) return;
@@ -167,6 +223,9 @@ class _BoardScreenState extends State<BoardScreen>
     setState(() {
       _busy = true;
       _message = "Rolling the dice...";
+      // Any lingering treasure glow from a previous landing fades away.
+      _treasureGlow.stop();
+      _treasureGlow.value = 0;
     });
 
     // Decide the roll value FIRST; the cycling animation below always lands
@@ -202,15 +261,16 @@ class _BoardScreenState extends State<BoardScreen>
     if (!mounted) return;
 
     // Sliding move: advance ONE tile at a time through the serpentine
-    // (~300 ms per square) so the token visibly glides the whole path.
+    // (~350 ms per square) so the token visibly glides the whole path —
+    // always exactly `roll` squares, never any random extra movement.
     // Snakes/ladders are only checked on the RESTING tile, never for squares
     // the explorer passes over along the way.
     for (int t = from; t < rawTarget; t++) {
       setState(() {
         _player = t + 1;
-        _bounce.forward(from: 0);
+        _startBounce();
       });
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await Future<void>.delayed(const Duration(milliseconds: 350));
       if (!mounted) return;
     }
 
@@ -219,7 +279,25 @@ class _BoardScreenState extends State<BoardScreen>
 
     await _resolveLanding();
     if (!mounted) return;
+
+    // Rare surprise events: about 5% of rolls trigger one extra moment —
+    // a festival, a train ride, a monsoon delay, a temple blessing or a
+    // wildlife safari — after the tile's own outcome has resolved.
+    if (_player < finishTile && _rng.nextDouble() < 0.05) {
+      await _openSurpriseEvent();
+      if (!mounted) return;
+    }
     setState(() => _busy = false);
+
+    // Green Lucky Box reward: one automatic FREE roll granted earlier.
+    if (_extraDice && _player < finishTile) {
+      _extraDice = false;
+      GameData.extraDiceReady = false;
+      _setMessage("\u{1F3B2} Lucky! You get an EXTRA ROLL!");
+      await Future<void>.delayed(const Duration(milliseconds: 550));
+      if (!mounted) return;
+      await _performRoll();
+    }
   }
 
   /// After movement ends, fire EXACTLY ONE tile outcome onto the square the
@@ -273,31 +351,11 @@ class _BoardScreenState extends State<BoardScreen>
 
     switch (tile.kind) {
       case TileKind.bonus:
-        // Green tile — a quick mini-game, always fresh and fully ownable.
-        await _openMiniGame();
-        break;
-      case TileKind.treasure:
-        // Yellow tile — unlock a new Heritage Badge into the collection.
-        GameData.treasuresOpened++;
-        final badge = randomNewBadge(_rng);
-        final isNew = GameData.badges.add(badge.id);
-        if (isNew) GameData.addDailyProgress();
-        if (isNew) {
-          _setMessage("Treasure found! ${badge.emoji} ${badge.name}");
-          await _showBadgeCelebration([badge], 0);
-        } else {
-          GameData.score += 10;
-          _confetti.forward(from: 0);
-          _setMessage("Treasure chest! +10 points (badge already collected)");
-        }
-        await _claimMission();
-        break;
-      case TileKind.challenge:
-        // Red tile — solve the challenge or suffer a random penalty.
+        // Green tile — a short educational mini-game picked at random from
+        // six fast challenge games.
         GameData.challengesCompleted++;
         GameData.addDailyProgress();
-        await _openChallenge();
-        await _claimMission();
+        await _openMiniGame(countsAsChallenge: true);
         break;
       case TileKind.quiz:
         GameData.quizzesCompleted++;
@@ -306,10 +364,11 @@ class _BoardScreenState extends State<BoardScreen>
         await Future<void>.delayed(const Duration(milliseconds: 250));
         if (!mounted) return;
         final correctBefore = GameData.correctAnswers;
+        final wrongBefore = GameData.wrongAnswers;
         await Navigator.of(context).push(
           PageRouteBuilder(
             pageBuilder: (context, animation, secondaryAnimation) =>
-                QuizScreen(stateName: tile.state ?? "India", bonus: 0),
+                QuizScreen(stateName: tile.state ?? "India", bonus: 20, tile: _player),
             transitionsBuilder:
                 (context, animation, secondaryAnimation, child) =>
                     FadeTransition(
@@ -320,11 +379,38 @@ class _BoardScreenState extends State<BoardScreen>
         );
         if (!mounted) return;
         final correctAfter = GameData.correctAnswers;
-        if (correctAfter > correctBefore) {
+        final wrongAfter = GameData.wrongAnswers;
+        if (wrongAfter > wrongBefore) {
+          // Wrong answer on a Knowledge Quiz tile: -10 points.
+          GameData.score = math.max(0, _score - 10);
+          _setMessage("\u2716 Wrong answer! -10 points.");
+        } else if (correctAfter > correctBefore) {
           GameData.addDailyProgress(correctAfter - correctBefore);
+          // Regional mission progress: a quiz answered right inside the
+          // stage it belongs to (Northern + Eastern missions ask for this).
+          final stage = stageIndexForTile(_player);
+          if (GameData.advanceStage(stage, StageGoalKind.quizCorrect)) {
+            final s = tourStages[stage];
+            _confetti.forward(from: 0);
+            _setMessage("\u2705 Correct! +30 points \u2022 ${s.emoji} "
+                "mission complete, +${s.reward} points!");
+          } else {
+            _setMessage("\u2705 Correct! +30 points.");
+          }
           await _claimMission();
+        } else {
+          _setMessage("Continue exploring...");
         }
-        _setMessage("Continue exploring...");
+        break;
+      case TileKind.treasure:
+        // Yellow tile — the Treasure Box: badges, monuments and coins.
+        await _openTreasureBox();
+        GameData.addDailyProgress();
+        break;
+      case TileKind.challenge:
+        // Red tile — run the gauntlet of the Penalty Box.
+        GameData.addDailyProgress();
+        await _openPenaltyBox();
         break;
       case TileKind.adventure:
         // White tile — a State Spotlight with facts + a knowledge check.
@@ -337,40 +423,145 @@ class _BoardScreenState extends State<BoardScreen>
 
   /// Exact-landing snake/ladder resolution. Triggered ONLY on the tile the
   /// player finally rests on — never for tiles passed over along the way.
+  /// Snakes slide the token down with a wiggling, slithering animation;
+  /// ladders carry it up with a joyful spring.
   Future<void> _applyChutes() async {
     final head = _player;
-    if (snakes.containsKey(head)) {
-      final tail = snakes[head]!;
+    final chute = _runBoard.chuteAt(head);
+    if (chute != null) {
       GameData.snakesUsed++;
       ProgressStore.save();
-      _setMessage("\u{1F40D} Oh no! A Snake bit you! Tile $head \u2192 Tile $tail");
-      await Future<void>.delayed(const Duration(milliseconds: 550));
+      if (_shield) {
+        _shield = false;
+        GameData.shieldReady = false;
+        GameData.shieldsUsed++;
+        _setMessage("\u{1F6E1} Your shield blocked the snake! No damage!");
+        await Future<void>.delayed(const Duration(milliseconds: 650));
+        if (!mounted) return;
+        return;
+      }
+      if (_skipSnake) {
+        _skipSnake = false;
+        _setMessage("\u{1F40D} Lucky — you skipped that snake!");
+        await Future<void>.delayed(const Duration(milliseconds: 650));
+        if (!mounted) return;
+        return;
+      }
+      var tail = chute.tail;
+      if (_doubleSnake) {
+        _doubleSnake = false;
+        GameData.doubleSnakes++;
+        tail = math.max(1, chute.head - chute.distance * 2);
+        _setMessage(
+            "\u{1F40D}\u{1F62D} The snake strikes TWICE! Tile $head \u2192 Tile $tail");
+      } else {
+        _setMessage("\u{1F40D} Oh no! A Snake bit you! Tile $head \u2192 Tile $tail");
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
+      await _animateSlide(
+        head,
+        tail,
+        snake: true,
+        amplitude: switch (chute.size) {
+          ChuteSize.small => 0.18,
+          ChuteSize.medium => 0.24,
+          ChuteSize.giant => 0.32,
+        },
+      );
       if (!mounted) return;
       setState(() {
         _player = tail;
-        _snake.forward(from: 0);
-        _bounce.forward(from: 0);
+        _slideFrom = null;
+        _slideTo = null;
+        _startBounce();
       });
-      await Future<void>.delayed(const Duration(milliseconds: 400));
-    } else if (ladders.containsKey(head)) {
-      final top = ladders[head]!;
-      GameData.laddersUsed++;
-      ProgressStore.save();
-      _setMessage("\u{1FA9F} Great! You found a Ladder! Tile $head \u2192 Tile $top");
-      await Future<void>.delayed(const Duration(milliseconds: 550));
-      if (!mounted) return;
-      setState(() {
-        _player = top;
+      if (tail == 1) {
         _confetti.forward(from: 0);
-        _bounce.forward(from: 0);
-      });
-      await Future<void>.delayed(const Duration(milliseconds: 400));
+        _setMessage("Ouch! The snake slipped you right back to the start!");
+      } else {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        if (!mounted) return;
+        _setMessage("You slid all the way down \u{1F40D}");
+      }
+    } else {
+      final ladder = _runBoard.ladderAt(head);
+      if (ladder != null) {
+        GameData.laddersUsed++;
+        ProgressStore.save();
+        _setMessage(
+            "\u{1FA9F} Great! You found a Ladder! Tile $head \u2192 Tile ${ladder.top}");
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        if (!mounted) return;
+        await _animateSlide(head, ladder.top, snake: false);
+        if (!mounted) return;
+        setState(() {
+          _player = ladder.top;
+          _slideFrom = null;
+          _slideTo = null;
+          _confetti.forward(from: 0);
+          _startBounce();
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        if (!mounted) return;
+        _setMessage("What a climb! \u{1FA9F}");
+      }
     }
   }
 
-  /// Green tile: opens a random mini-game. Rewards (points + any badges) are
-  /// applied from the [MiniGameResult] the screen pops back with.
-  Future<void> _openMiniGame() async {
+  /// Glides the token from [from] to [to]. Snakes slither along a wiggly
+  /// path (bigger amplitudes for giant snakes); ladders spring straight up.
+  Future<void> _animateSlide(
+    int from,
+    int to, {
+    required bool snake,
+    double amplitude = 0.22,
+  }) async {
+    setState(() {
+      _player = to;
+      _slideFrom = from;
+      _slideTo = to;
+      _slideIsSnake = snake;
+      _slideAmplitude = amplitude;
+      _startBounce();
+      if (snake) {
+        _snake.stop();
+        _snake.forward(from: 0);
+      }
+    });
+    _slideCtrl.stop();
+    await _slideCtrl.forward(from: 0);
+  }
+
+  /// Extra offset applied to the token while it slides along a snake or
+  /// climbs a ladder — pure fluff on top of the gliding position.
+  Offset _slideWiggle(double cell) {
+    final from = _slideFrom;
+    final to = _slideTo;
+    if (from == null || to == null || from == to) return Offset.zero;
+    final t = _slideCtrl.value.clamp(0.0, 1.0);
+    final a = _centerFor(from, cell);
+    final b = _centerFor(to, cell);
+    final d = b - a;
+    final len = d.distance;
+    if (len < 1) return Offset.zero;
+    if (!_slideIsSnake) {
+      // Ladder climb: a gentle springing hop.
+      return Offset(0, -math.sin(t * math.pi) * cell * 0.08);
+    }
+    final perp = Offset(-d.dy / len, d.dx / len);
+    final winds = 3.0 + (len / 90.0).clamp(0.0, 4.0);
+    return perp *
+        (math.sin(t * math.pi * winds) * cell * _slideAmplitude * (1 - t * 0.6));
+  }
+
+  /// Green tile: opens a random short educational mini-game (State Puzzle,
+  /// Find the State, Match the Food, Festival Match, Spot the Monument or the
+  /// State/Capital Memory Card). When [countsAsChallenge] (a real Green tile)
+  /// the win also pushes the matching Western mission forward. Rewards (points
+  /// plus any badges, cards, medals, foods or monuments discovered) are applied
+  /// from the [MiniGameResult] the screen pops back with.
+  Future<void> _openMiniGame({bool countsAsChallenge = false}) async {
     _setMessage("Bonus tile! A mini-game awaits \u{1F3AE}");
     await Future<void>.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
@@ -394,62 +585,227 @@ class _BoardScreenState extends State<BoardScreen>
       return;
     }
 
-    for (final id in result.badges) {
-      if (GameData.badges.add(id)) GameData.addDailyProgress();
+    String message = "";
+    if (result.points > 0 && countsAsChallenge) {
+      final stage = stageIndexForTile(_player);
+      final done = GameData.advanceStage(stage, StageGoalKind.challengeCleared);
+      if (done) {
+        final s = tourStages[stage];
+        message = "${s.emoji} ${s.name} mission complete, "
+            "+${s.reward} points! \u{1F389}";
+      }
     }
+
+    final newBadges = <HeritageBadge>[];
+    for (final id in result.badges) {
+      if (GameData.badges.add(id)) {
+        GameData.addDailyProgress();
+        final b = badgeById(id);
+        if (b != null) newBadges.add(b);
+      }
+    }
+    for (final id in result.festivalCards) {
+      if (GameData.collectFestivalCard(id)) {
+        GameData.addDailyProgress();
+        message += " \u{1F389}${festivalCardById(id)?.name ?? "Festival Card"}!";
+      }
+    }
+    for (final id in result.explorerMedals) {
+      if (GameData.collectExplorerMedal(id)) {
+        GameData.addDailyProgress();
+        message += " \u{1F396}${medalById(id)?.name ?? "Explorer Medal"}!";
+      }
+    }
+    for (final f in result.foods) {
+      if (GameData.discoverFood(f)) {
+        GameData.addDailyProgress();
+        message += " \u{1F35B}$f!";
+      }
+    }
+    for (final m in result.monuments) {
+      if (GameData.discoverMonument(m)) {
+        GameData.addDailyProgress();
+        message += " \u{1F3DB}$m!";
+      }
+    }
+
+    if (countsAsChallenge && result.points > 0 && _rng.nextDouble() < 0.25) {
+      final medal = randomNewExplorerMedal(_rng);
+      if (GameData.collectExplorerMedal(medal.id)) {
+        message += " \u{1F396}${medal.name}!";
+      }
+    }
+
     if (result.points > 0) {
       GameData.score += result.points;
       _confetti.forward(from: 0);
-      _setMessage("Mini-game complete! +${result.points} points");
+      _setMessage(message.isNotEmpty
+          ? "Mini-game cleared! +${result.points} points \u2022 $message"
+          : "Mini-game cleared! +${result.points} points");
     } else {
-      _setMessage("Mini-game over!");
+      _setMessage("Mini-game over! $message");
     }
-    if (result.badges.isNotEmpty) {
-      final unlocked =
-          result.badges.map(badgeById).whereType<HeritageBadge>().toList();
-      await _showBadgeCelebration(unlocked, result.points);
+    if (newBadges.isNotEmpty) {
+      await _showBadgeCelebration(newBadges, result.points);
     }
     await _claimMission();
     ProgressStore.save();
   }
 
-  /// Red tile: opens a random challenge. A wrong answer triggers one random
-  /// penalty — walk back 2 tiles, lose 5 points, or skip the next turn.
-  Future<void> _openChallenge() async {
-    _setMessage("Challenge tile! \u26A1 Solve it to escape the penalty!");
-    await Future<void>.delayed(const Duration(milliseconds: 300));
+  /// Red tile: the Penalty Box — one random misfortune strikes: walk back,
+  /// lose points, miss the next turn, or lose a badge.
+  Future<void> _openPenaltyBox() async {
+    _setMessage("\u{1F6A8} Penalty Box! A stroke of bad luck!");
+    await Future<void>.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
-    final result = await Navigator.of(context).push<ChallengeResult>(
+
+    final roll = _rng.nextInt(4);
+    if (roll == 0) {
+      final back = 2 + _rng.nextInt(3); // 2..4
+      _setMessage("\u{1F6A8} Penalty! Stumble back $back tiles.");
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      if (!mounted) return;
+      await _walkBack(back);
+    } else if (roll == 1) {
+      final loss = 10 + _rng.nextInt(16); // 10..25
+      GameData.score = math.max(0, _score - loss);
+      _setMessage("\u{1F6A8} Penalty! -$loss points.");
+    } else if (roll == 2) {
+      _skipNextTurn = true;
+      _setMessage("\u{1F6A8} Penalty! Your NEXT TURN is skipped.");
+    } else if (GameData.badges.isNotEmpty) {
+      final lost =
+          GameData.badges.elementAt(_rng.nextInt(GameData.badges.length));
+      GameData.badges.remove(lost);
+      final b = badgeById(lost);
+      _setMessage(
+          "\u{1F6A8} Penalty! You lost ${b?.emoji ?? "\u{1F396}"} ${b?.name ?? "a badge"}!");
+    } else {
+      GameData.score = math.max(0, _score - 15);
+      _setMessage("\u{1F6A8} Penalty! -15 points.");
+    }
+    await _claimMission();
+    ProgressStore.save();
+  }
+
+  /// Yellow tile: one random reward event from the Treasure Event spread —
+  /// the classic Treasure Chest, the Traveller's Backpack, Spin the Wheel, a
+  /// Mystery Box or a Heritage Discovery. Every event records the opened chest
+  /// and pushes the Southern regional mission, exactly like the plain box did.
+  Future<void> _openTreasureBox() async {
+    GameData.treasuresOpened++;
+    _setMessage("\u{1F48E} Treasure tile! A reward event awaits!");
+    // Golden pulse while the treasure tile is active.
+    _treasureGlow.repeat(reverse: true);
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!mounted) return;
+
+    // Record the opened chest (lifetime Treasure Collection) and push the
+    // Southern mission — it asks for exactly one opened treasure.
+    final tileNo = _player;
+    GameData.treasureChests.add(tileNo);
+    final allChests = GameData.treasureChests.length >= treasureTileCount;
+    final stage = stageIndexForTile(tileNo);
+    final done = GameData.advanceStage(stage, StageGoalKind.treasure);
+    final stageRef = done ? tourStages[stage] : null;
+
+    final result = await Navigator.of(context).push<TreasureEventResult>(
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) =>
-            const ChallengeScreen(),
+            const TreasureEventScreen(),
         transitionsBuilder: (context, animation, secondaryAnimation, child) =>
             FadeTransition(opacity: animation, child: child),
       ),
     );
     if (!mounted) return;
+    _treasureGlow.stop();
+    _treasureGlow.value = 0;
 
-    switch (result?.penalty ?? ChallengePenalty.none) {
-      case ChallengePenalty.backTwo:
-        _setMessage("Challenge failed! Walk back 2 tiles.");
-        await Future<void>.delayed(const Duration(milliseconds: 350));
-        if (!mounted) return;
-        await _walkBack(2);
-        break;
-      case ChallengePenalty.loseFive:
-        GameData.score = math.max(0, _score - 5);
-        _setMessage("Challenge failed! -5 points.");
-        break;
-      case ChallengePenalty.skipTurn:
-        _skipNextTurn = true;
-        _setMessage("Challenge failed! Next turn is skipped.");
-        break;
-      case ChallengePenalty.none:
+    if (result == null) {
+      GameData.score += 2;
+      _setMessage("Treasure event skipped. +2 points.");
+    } else {
+      GameData.score += result.points;
+      GameData.coins += result.coins;
+      final newBadges = <HeritageBadge>[];
+      for (final id in result.badges) {
+        if (GameData.badges.add(id)) {
+          GameData.addDailyProgress();
+          final b = badgeById(id);
+          if (b != null) newBadges.add(b);
+        }
+      }
+      for (final id in result.festivalCards) {
+        if (GameData.collectFestivalCard(id)) GameData.addDailyProgress();
+      }
+      for (final id in result.explorerMedals) {
+        if (GameData.collectExplorerMedal(id)) GameData.addDailyProgress();
+      }
+      if (result.food != null && GameData.discoverFood(result.food!)) {
+        GameData.addDailyProgress();
+      }
+      if (result.monument != null &&
+          GameData.discoverMonument(result.monument!)) {
+        GameData.addDailyProgress();
+      }
+      var stamped = 0;
+      if (result.stamps > 0) {
+        final pool = indiaStates
+            .where((s) => !GameData.passportStates.contains(s.name))
+            .toList()
+          ..shuffle(_rng);
+        final take = math.min(result.stamps, pool.length);
+        for (int i = 0; i < take; i++) {
+          if (GameData.stampPassport(pool[i].name) > 0) stamped++;
+        }
+      }
+      _setMessage(result.points > 0 || result.coins > 0
+          ? "${result.emoji} ${result.line}"
+          : result.line);
+      if (result.points > 0 || newBadges.isNotEmpty || result.coins > 0) {
         _confetti.forward(from: 0);
-        _setMessage("Challenge cleared! No penalty. \u{1F389}");
-        break;
+      }
+      if (newBadges.isNotEmpty) {
+        await _showBadgeCelebration(newBadges, result.points);
+      } else if (allChests || stageRef != null || result.food != null ||
+          result.monument != null || stamped > 0) {
+        final firstNewBadge = newBadges.isNotEmpty ? newBadges.first : null;
+        await _showTreasurePopup(
+          firstNewBadge,
+          allTreasures: allChests,
+          stageComplete: stageRef,
+          caption: result.line,
+        );
+      }
     }
+
+    if (allChests) {
+      _confetti.forward(from: 0);
+      _setMessage("\u{1F451} ALL TREASURES COLLECTED!");
+    }
+    await _claimMission();
     ProgressStore.save();
+  }
+
+  /// The "Treasure Found!" reward pop-up — it dismisses itself.
+  Future<void> _showTreasurePopup(
+    HeritageBadge? badge, {
+    bool allTreasures = false,
+    TourStage? stageComplete,
+    String? caption,
+  }) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black54,
+      builder: (dialogContext) => _TreasurePopup(
+        badge: badge,
+        allTreasures: allTreasures,
+        stageComplete: stageComplete,
+        caption: caption,
+      ),
+    );
   }
 
   /// Smooth one-tile-at-a-time reverse walk for the back-2 penalty.
@@ -457,7 +813,7 @@ class _BoardScreenState extends State<BoardScreen>
     for (int i = 0; i < steps && _player > 1; i++) {
       setState(() {
         _player -= 1;
-        _bounce.forward(from: 0);
+        _startBounce();
       });
       await Future<void>.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
@@ -689,12 +1045,136 @@ class _BoardScreenState extends State<BoardScreen>
         GameData.score += 15;
         _setMessage("\u{1F381} Mystery Surprise! +15 points");
       }
-    } else {
+    } else if (roll < 92) {
       _setMessage("\u{1F3AE} Mystery Surprise! A bonus mini-game!");
       await _openMiniGame();
+    } else {
+      // Lucky twist: coins, a snake shield, or an extra dice roll.
+      final twist = _rng.nextInt(3);
+      if (twist == 0) {
+        final pts = 10 + _rng.nextInt(16);
+        GameData.coins += pts;
+        _setMessage("\u{1FA99} Mystery Surprise! +$pts explorer coins!");
+      } else if (twist == 1) {
+        _shield = true;
+        GameData.shieldReady = true;
+        _setMessage("\u{1F6E1} Mystery Surprise! You got a SHIELD!");
+      } else {
+        _extraDice = true;
+        GameData.extraDiceReady = true;
+        _setMessage("\u{1F3B2} Mystery Surprise! You get an EXTRA ROLL!");
+      }
     }
     await _claimMission();
     ProgressStore.save();
+  }
+
+  /// Rare surprise event (~5% of rolls): a Peacock Festival, the Indian
+  /// Railway Express, a Monsoon Delay, a Temple Blessing or a Wildlife Safari.
+  /// Each flashes a quick fun fact and grants a small, instant reward.
+  Future<void> _openSurpriseEvent() async {
+    final idx = _rng.nextInt(5);
+    var title = "";
+    var emoji = "";
+    var fact = "";
+    var message = "";
+    var penalty = false;
+    HeritageBadge? badge;
+
+    switch (idx) {
+      case 0:
+        title = "PEACOCK FESTIVAL";
+        emoji = "\u{1F99A}";
+        fact =
+            "The peacock \u2014 India's national bird \u2014 dances in the rain before the monsoon.";
+        GameData.score += 15;
+        message = "\u{1F99A} Peacock Festival! +15 points";
+        if (GameData.badges.add("peacock")) badge = badgeById("peacock");
+        break;
+      case 1:
+        title = "INDIAN RAILWAY EXPRESS";
+        emoji = "\u{1F682}";
+        fact =
+            "Indian Railways is one of the world's largest rail networks, carrying millions every day.";
+        GameData.score += 20;
+        message = "\u{1F682} Railway Express! +20 points";
+        if (GameData.collectExplorerMedal("rail_fan")) {
+          message += " \u{1F396} Rail Fan medal!";
+        }
+        break;
+      case 2:
+        title = "MONSOON DELAY";
+        emoji = "\u{1F327}";
+        fact =
+            "Warm monsoon winds arrive in June and bring life-giving rain to India's farms.";
+        _skipNextTurn = true;
+        penalty = true;
+        message = "\u{1F327} Monsoon Delay! The next turn is skipped.";
+        break;
+      case 3:
+        title = "TEMPLE BLESSING";
+        emoji = "\u{1F5FF}";
+        fact =
+            "Temple bells are believed to clear the mind and bring focus to the devotee.";
+        GameData.score += 25;
+        message = "\u{1F5FF} Temple Blessing! +25 points";
+        break;
+      default:
+        title = "WILDLIFE SAFARI";
+        emoji = "\u{1F405}";
+        fact =
+            "India shelters the Bengal tiger in reserves like Jim Corbett and Sundarbans.";
+        final freshM = indiaStates
+            .where((s) => !GameData.monuments.contains(s.monument))
+            .toList();
+        final freshF =
+            indiaStates.where((s) => !GameData.foods.contains(s.food)).toList();
+        if (freshM.isNotEmpty) {
+          final s = freshM[_rng.nextInt(freshM.length)];
+          GameData.monuments.add(s.monument);
+          message = "\u{1F405} Wildlife Safari! Spotted ${s.monument}";
+        } else if (freshF.isNotEmpty) {
+          final s = freshF[_rng.nextInt(freshF.length)];
+          GameData.foods.add(s.food);
+          message = "\u{1F405} Wildlife Safari! Tasted ${s.food}";
+        } else {
+          GameData.coins += 15;
+          message = "\u{1F405} Wildlife Safari! +15 explorer coins";
+        }
+        break;
+    }
+
+    if (!penalty) _confetti.forward(from: 0);
+    await _showSurpriseDialog(emoji, title, fact, penalty: penalty);
+    if (!mounted) return;
+    _setMessage(message);
+    if (badge != null) {
+      GameData.addDailyProgress();
+      await _showBadgeCelebration([badge], 15);
+    }
+    GameData.addDailyProgress();
+    await _claimMission();
+    ProgressStore.save();
+  }
+
+  Future<void> _showSurpriseDialog(
+    String emoji,
+    String title,
+    String fact, {
+    required bool penalty,
+  }) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black45,
+      builder: (dialogContext) => _SurpriseEventDialog(
+        emoji: emoji,
+        title: title,
+        fact: fact,
+        penalty: penalty,
+      ),
+    );
   }
 
   Future<void> _finishJourney() async {
@@ -712,6 +1192,45 @@ class _BoardScreenState extends State<BoardScreen>
         }
       }
     }
+
+    // The Summit Checkpoint: reaching tile 36 is only half the battle. The
+    // journey is only truly WON when every regional mission is complete, the
+    // score target is met, every treasure chest is collected and the whole
+    // India Passport is finished. If anything is still missing the explorer
+    // must TRAVEL AGAIN and hunt it down.
+    final missing = _unmetWinConditions();
+    if (missing.isNotEmpty) {
+      final checkpoint = await _showSummitCheckpoint(missing);
+      if (!mounted) return;
+      if (checkpoint == 'home') {
+        Navigator.of(context).pushAndRemoveUntil(
+          PageRouteBuilder(
+            pageBuilder: (context, animation, secondaryAnimation) =>
+                const MapScreen(),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) =>
+                    FadeTransition(opacity: animation, child: child),
+          ),
+          (route) => route.isFirst,
+        );
+        return;
+      }
+      // 'again' — replay the SAME journey from Tile 1, hunting the missing
+      // goals. Lifetime progress (chests, passport, badges, score) carries
+      // over so every attempt inches the explorer closer to mastery.
+      GameData.resetJourney();
+      GameData.ensureDailyMission();
+      _rollMysteryTiles();
+      setState(() {
+        _player = 1;
+        _die = 1;
+        _busy = false;
+        _skipNextTurn = false;
+        _message = _journeyStartMessage();
+      });
+      return;
+    }
+
     // Bank the run into the lifetime total, unlock (and move to) the next
     // journey on a first completion, and flip the Legend of India achievement
     // when all six journeys have been conquered.
@@ -765,6 +1284,141 @@ class _BoardScreenState extends State<BoardScreen>
       _skipNextTurn = false;
       _message = _journeyStartMessage();
     });
+  }
+
+  /// Every achievement the summit still demands of the explorer. The final
+  /// victory of the journey requires reaching tile 36 (already done), all
+  /// four regional missions, the win score, all treasure chests and the
+  /// completed India Passport.
+  List<String> _unmetWinConditions() {
+    final unmet = <String>[];
+    for (var i = 0; i < tourStages.length; i++) {
+      if (!GameData.stageRewardClaimed[i]) {
+        final s = tourStages[i];
+        unmet.add('${s.emoji} ${s.name}: ${s.missionTitle}');
+      }
+    }
+    if (GameData.score < requiredWinScore) {
+      unmet.add('\u2B50 Reach the win target: '
+          '${GameData.score}/$requiredWinScore points');
+    }
+    if (GameData.treasureChests.length < treasureTileCount) {
+      unmet.add('\u{1F48E} Collect all treasures: '
+          '${GameData.treasureChests.length}/$treasureTileCount chests');
+    }
+    if (!GameData.passportCompleted) {
+      unmet.add('\u{1F6C2} Complete the Digital India Passport: '
+          '${GameData.passportStates.length}/${indiaStates.length} states');
+    }
+    return unmet;
+  }
+
+  /// The Summit Checkpoint: honest "you reached the top, but not the mastery"
+  /// dialog that lists exactly what is still missing before the journey can
+  /// be WON. Returns 'again' (replay this journey) or 'home' (back to map).
+  Future<String?> _showSummitCheckpoint(List<String> missing) async {
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding:
+            const EdgeInsets.symmetric(horizontal: 26, vertical: 22),
+        child: Container(
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF3A2A0F), Color(0xFF241708)],
+            ),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(
+              color: const Color(0xFFFFB300).withValues(alpha: 0.5),
+              width: 1.5,
+            ),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black45,
+                blurRadius: 24,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.terrain_rounded,
+                    color: Color(0xFFFFB300), size: 52),
+                const SizedBox(height: 8),
+                const Text(
+                  "SUMMIT REACHED!",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  "You conquered all 36 tiles, but a true master of Bharat "
+                  "must do more. Complete every goal below to WIN this journey:",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.7),
+                    fontSize: 12.5,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                for (final item in missing)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          "\u274C",
+                          style: TextStyle(fontSize: 13),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            item,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w700,
+                              height: 1.3,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 16),
+                _actionButton(
+                  label: "TRAVEL AGAIN \u{1F6B6}",
+                  onTap: () => Navigator.of(dialogContext).pop('again'),
+                ),
+                const SizedBox(height: 10),
+                _actionButton(
+                  label: "RETURN TO MAP",
+                  isGreen: false,
+                  onTap: () {
+                    ProgressStore.save();
+                    Navigator.of(dialogContext).pop('home');
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// The Lucky Wheel — one free spin for a first-time journey completion.
@@ -1135,7 +1789,7 @@ class _BoardScreenState extends State<BoardScreen>
           const SizedBox(width: 12),
           const Expanded(
             child: Text(
-              "SNAKE & LADDER ADVENTURE",
+              "BHARAT ADVENTURE",
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
@@ -1349,14 +2003,14 @@ class _BoardScreenState extends State<BoardScreen>
                 board: board,
                 cell: cell,
                 columns: boardColumns,
-                snakes: snakes,
-                ladders: ladders,
-                // Thin, elegant snakes that never hide tile numbers.
-                snakeThickness: 0.55,
+                snakes: _runBoard.snakes,
+                ladders: _runBoard.ladders,
               ),
             ),
           ),
         ),
+        // The player token is stacked ABOVE the snakes and ladders so it is
+        // always fully visible no matter where it slides.
         _buildToken(cell),
         AnimatedBuilder(
           animation: _confetti,
@@ -1381,18 +2035,40 @@ class _BoardScreenState extends State<BoardScreen>
       final row = i ~/ boardColumns;
       final col = i % boardColumns;
       final tile = tiles[i];
+
+      Widget box = _BoardTileBox(
+        number: tile.number,
+        isCurrent: tile.number == _player,
+        isFinish: tile.number == finishTile,
+        isTreasure: tile.kind == TileKind.treasure,
+        treasureGlow: 0,
+        cell: cell,
+        style: _tileStyle(tile),
+      );
+
+      // Treasure squares pulse gold while the explorer stands on them.
+      if (tile.kind == TileKind.treasure) {
+        box = AnimatedBuilder(
+          animation: _treasureGlow,
+          builder: (context, _) => _BoardTileBox(
+            number: tile.number,
+            isCurrent: tile.number == _player,
+            isFinish: tile.number == finishTile,
+            isTreasure: true,
+            treasureGlow: _treasureGlow.value,
+            cell: cell,
+            style: _tileStyle(tile),
+          ),
+        );
+      }
+
       children.add(
         Positioned(
           left: col * cell + gap / 2,
           top: row * cell + gap / 2,
           width: cell - gap,
           height: cell - gap,
-          child: _BoardTileBox(
-            number: tile.number,
-            isCurrent: tile.number == _player,
-            cell: cell,
-            style: _tileStyle(tile),
-          ),
+          child: box,
         ),
       );
     }
@@ -1400,63 +2076,54 @@ class _BoardScreenState extends State<BoardScreen>
   }
 
   _TileStyle _tileStyle(BoardTile tile) {
-    final isStart = tile.number == 1;
-    final isFinish = tile.number == finishTile;
-
-    final Color base;
-    switch (tile.kind) {
-      case TileKind.quiz:
-        base = const Color(0xFF1976D2);
-      case TileKind.bonus:
-        base = const Color(0xFF388E3C);
-      case TileKind.treasure:
-        base = const Color(0xFFF9A825);
-      case TileKind.challenge:
-        base = const Color(0xFFC62828);
-      case TileKind.adventure:
-        base = const Color(0xFFFFFDF4); // White = normal
-    }
-
-    final String emoji = switch (tile.kind) {
-      TileKind.quiz => "\u2753",
-      TileKind.bonus => "\u2B50",
-      TileKind.treasure => "\uD83D\uDCB0",
-      TileKind.challenge => "\u26A1",
-      TileKind.adventure => isStart
-          ? "\uD83D\uDEA9"
-          : isFinish
-              ? "\uD83C\uDFC6"
-              : "\uD83E\uDDED",
+    // The clean board: only the four tile colours plus plain white — no
+    // further text, names, emoji or labels beyond the tile number.
+    final Color base = switch (tile.kind) {
+      TileKind.quiz => const Color(0xFF1976D2),
+      TileKind.bonus => const Color(0xFF388E3C),
+      TileKind.treasure => const Color(0xFFF9A825),
+      TileKind.challenge => const Color(0xFFC62828),
+      TileKind.adventure => const Color(0xFFF4EEE0), // White-ish = normal
     };
-
-    final String? label;
-    if (isStart) {
-      label = "START";
-    } else if (isFinish) {
-      label = "FINISH";
-    } else if (tile.state != null) {
-      label = tile.state;
-    } else {
-      label = switch (tile.kind) {
-        TileKind.quiz => "QUIZ",
-        TileKind.bonus => "BONUS",
-        TileKind.treasure => "TREASURE",
-        TileKind.challenge => "CHALLENGE",
-        TileKind.adventure => null,
-      };
-    }
 
     return _TileStyle(
       base: base,
       isLight: tile.kind == TileKind.adventure,
-      emoji: emoji,
-      label: label,
     );
   }
 
   Widget _buildToken(double cell) {
-    final c = _centerFor(_player, cell);
     final tokenSize = cell * 0.62;
+
+    // While a snake slithers / ladder climbs, the token is positioned with
+    // the exact interpolated slide path (wiggly for snakes).
+    if (_slideFrom != null && _slideTo != null) {
+      return AnimatedBuilder(
+        animation: Listenable.merge([_slideCtrl, _bounce]),
+        builder: (context, _) {
+          final slideT = _slideCtrl.value.clamp(0.0, 1.0);
+          final c = Offset.lerp(
+                  _centerFor(_slideFrom!, cell),
+                  _centerFor(_slideTo!, cell),
+                  Curves.easeInOutCubic.transform(slideT)) ??
+              _centerFor(_player, cell);
+          final pos = c + _slideWiggle(cell);
+          return Positioned(
+            left: pos.dx - tokenSize / 2,
+            top: pos.dy - tokenSize / 2,
+            width: tokenSize,
+            height: tokenSize,
+            child: Transform.translate(
+              offset: Offset(
+                  0, -math.sin(_bounce.value * math.pi) * cell * 0.12),
+              child: Explorer(size: tokenSize, bounce: _bounce.value),
+            ),
+          );
+        },
+      );
+    }
+
+    final c = _centerFor(_player, cell);
     return AnimatedPositioned(
       duration: const Duration(milliseconds: 380),
       curve: Curves.easeInOutCubic,
@@ -1470,6 +2137,65 @@ class _BoardScreenState extends State<BoardScreen>
           offset: Offset(0, -math.sin(_bounce.value * math.pi) * cell * 0.12),
           child: Explorer(size: tokenSize, bounce: _bounce.value),
         ),
+      ),
+    );
+  }
+
+  /// The four regional-mission chips under the board: each shows whether its
+  /// mission is claimed (✓) or how far the current run has pushed it.
+  Widget _buildStageStrip() {
+    return Row(
+      children: [
+        for (var i = 0; i < tourStages.length; i++) ...[
+          if (i > 0) const SizedBox(width: 5),
+          Expanded(child: _stageChip(i)),
+        ],
+      ],
+    );
+  }
+
+  Widget _stageChip(int i) {
+    final s = tourStages[i];
+    final claimed = GameData.stageRewardClaimed[i];
+    final progress = GameData.stageProgress[i].clamp(0, s.goalCount);
+    final done = claimed || progress >= s.goalCount;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+      decoration: BoxDecoration(
+        color: done
+            ? const Color(0xFF138808).withValues(alpha: 0.13)
+            : const Color(0xFF5A3A1B).withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: done
+              ? const Color(0xFF138808).withValues(alpha: 0.4)
+              : const Color(0xFF5A3A1B).withValues(alpha: 0.2),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '${s.emoji} ${s.name.split(' ').first}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: done ? const Color(0xFF0B5B03) : const Color(0xFF4A3018),
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.2,
+            ),
+          ),
+          const SizedBox(height: 1),
+          Text(
+            done ? '\u2713 DONE' : '$progress/${s.goalCount}',
+            style: TextStyle(
+              color: done ? const Color(0xFF0B5B03) : const Color(0xFF8A5A2B),
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1498,6 +2224,8 @@ class _BoardScreenState extends State<BoardScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          _buildStageStrip(),
+          const SizedBox(height: 6),
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 260),
             child: Text(
@@ -1564,33 +2292,39 @@ class _BoardScreenState extends State<BoardScreen>
   }
 }
 
-/// A single premium square. Numbers are ALWAYS visible: dark chip on light
-/// (white) tiles, white chip on colored tiles.
+/// A single premium square — totally clean and readable: the ONLY content is
+/// its tile number (top-left chip) on the coloured box. Landing on a treasure
+/// tile pulses a golden glow out from the tile. The finish square wears a
+/// chased gold ring.
 class _BoardTileBox extends StatelessWidget {
   final int number;
   final bool isCurrent;
+  final bool isFinish;
+  final bool isTreasure;
+  final double treasureGlow; // 0..1, pulses while the treasure tile is open
   final double cell;
   final _TileStyle style;
 
   const _BoardTileBox({
     required this.number,
     required this.isCurrent,
+    required this.isFinish,
+    required this.isTreasure,
+    required this.treasureGlow,
     required this.cell,
     required this.style,
   });
 
-  Color _lighten(Color c, double amount) => Color.lerp(c, Colors.white, amount) ?? c;
+  Color _lighten(Color c, double amount) =>
+      Color.lerp(c, Colors.white, amount) ?? c;
 
   @override
   Widget build(BuildContext context) {
     final radius = (cell * 0.16).clamp(6.0, 12.0);
-    final numberSize = (cell * 0.30).clamp(11.0, 19.0);
-    final emojiSize = (cell * 0.34).clamp(15.0, 27.0);
-    final showLabel = style.label != null && cell >= 40;
-    final labelSize = (cell * 0.115).clamp(5.0, 9.0);
-
     final color = style.base;
     final isLight = style.isLight;
+    final pulsing = isTreasure && isCurrent;
+    final glow = pulsing ? treasureGlow : 0.0;
 
     return Container(
       decoration: BoxDecoration(
@@ -1605,12 +2339,21 @@ class _BoardTileBox extends StatelessWidget {
         border: Border.all(
           color: isCurrent
               ? const Color(0xFFFFB300)
-              : (isLight
-                  ? const Color(0xFFC99B63).withValues(alpha: 0.55)
-                  : Colors.white.withValues(alpha: 0.55)),
-          width: isCurrent ? 2.4 : 1.2,
+              : isFinish
+                  ? const Color(0xFFB8860B)
+                  : (isLight
+                      ? const Color(0xFFC99B63).withValues(alpha: 0.55)
+                      : Colors.white.withValues(alpha: 0.55)),
+          width: isCurrent ? 2.4 : (isFinish ? 2.0 : 1.2),
         ),
         boxShadow: [
+          // Landing on treasure: a golden pulse glows out from the tile.
+          if (pulsing)
+            BoxShadow(
+              color: const Color(0xFFFFB300).withValues(alpha: 0.5 * glow),
+              blurRadius: 18 * glow,
+              spreadRadius: 6 * glow,
+            ),
           if (isCurrent)
             BoxShadow(
               color: const Color(0xFFFFC107).withValues(alpha: 0.85),
@@ -1647,7 +2390,7 @@ class _BoardTileBox extends StatelessWidget {
                 ),
               ),
 
-            // Number chip — dark on white tiles, white on colored tiles.
+            // Tile number — dark chip on white tiles, white chip on colored.
             Positioned(
               top: 2,
               left: 2.5,
@@ -1665,7 +2408,7 @@ class _BoardTileBox extends StatelessWidget {
                 child: Text(
                   '$number',
                   style: TextStyle(
-                    fontSize: numberSize,
+                    fontSize: (cell * 0.30).clamp(11.0, 19.0),
                     fontWeight: FontWeight.w800,
                     color: isLight ? Colors.white : Colors.black87,
                     height: 1.1,
@@ -1674,50 +2417,19 @@ class _BoardTileBox extends StatelessWidget {
               ),
             ),
 
-            if (style.emoji != null)
-              Center(
-                child: Text(
-                  style.emoji!,
-                  style: TextStyle(
-                    fontSize: emojiSize,
-                    shadows: const [
-                      Shadow(
-                        color: Colors.black38,
-                        blurRadius: 3,
-                        offset: Offset(0, 1),
+            // Chased gold ring on the finish square — the goal of every run.
+            if (isFinish)
+              Positioned.fill(
+                child: Padding(
+                  padding: const EdgeInsets.all(3.2),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: const Color(0xFFFFD54F).withValues(alpha: 0.9),
+                        width: 2.2,
                       ),
-                    ],
-                  ),
-                ),
-              ),
-
-            if (showLabel)
-              Positioned(
-                left: 2,
-                right: 2,
-                bottom: 2,
-                child: Text(
-                  style.label!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: labelSize,
-                    height: 1.0,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.4,
-                    color: isLight
-                        ? const Color(0xFF6B4A24)
-                        : Colors.white,
-                    shadows: isLight
-                        ? null
-                        : const [
-                            Shadow(
-                              color: Colors.black45,
-                              blurRadius: 2,
-                              offset: Offset(0, 1),
-                            ),
-                          ],
+                    ),
                   ),
                 ),
               ),
@@ -1731,15 +2443,480 @@ class _BoardTileBox extends StatelessWidget {
 class _TileStyle {
   final Color base;
   final bool isLight;
-  final String? emoji;
-  final String? label;
 
   const _TileStyle({
     required this.base,
     required this.isLight,
-    this.emoji,
-    this.label,
   });
+}
+
+class _SurpriseEventDialog extends StatelessWidget {
+  final String emoji;
+  final String title;
+  final String fact;
+  final bool penalty;
+
+  const _SurpriseEventDialog({
+    required this.emoji,
+    required this.title,
+    required this.fact,
+    required this.penalty,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: penalty
+                ? [const Color(0xFFD84315), const Color(0xFF4E342E)]
+                : [const Color(0xFFFFB300), const Color(0xFF8E24AA)],
+          ),
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.85), width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.4),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "SURPRISE EVENT",
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.9),
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 2,
+                fontFamily: 'Pacifico',
+              ),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(30),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(emoji, style: const TextStyle(fontSize: 34)),
+                  const SizedBox(width: 10),
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      fontFamily: 'Pacifico',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              fact,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 18),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              style: TextButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: const Color(0xFF6D4C41),
+                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
+                ),
+              ),
+              child: const Text(
+                "Continue",
+                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A chunky glowing golden treasure chest drawn with [CustomPainter] — a
+/// crisp replacement for the tiny money-bag emoji on the treasure tiles.
+/// [glow] (0..1) drives a soft gold halo that pulses while the box is open.
+class _TreasureChest extends StatelessWidget {
+  final double size;
+  final double glow;
+
+  const _TreasureChest({required this.size, this.glow = 0});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(painter: _TreasureChestPainter(glow: glow)),
+    );
+  }
+}
+
+class _TreasureChestPainter extends CustomPainter {
+  final double glow;
+
+  const _TreasureChestPainter({required this.glow});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final c = Offset(w / 2, h / 2);
+    final gold = const Color(0xFFFFD54F);
+
+    final outline = Paint()
+      ..color = const Color(0xFF5D3A00)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * 0.05;
+
+    // Golden halo that pulses while the treasure box is open.
+    if (glow > 0.01) {
+      canvas.drawCircle(
+        c,
+        w * 0.72,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [
+              gold.withValues(alpha: 0.55 * glow),
+              gold.withValues(alpha: 0.0),
+            ],
+          ).createShader(Rect.fromCircle(center: c, radius: w * 0.72)),
+      );
+    }
+
+    // Sparkles at the lid corners while glowing.
+    if (glow > 0.05) {
+      final sparkle = Paint()..color = gold.withValues(alpha: glow);
+      _drawSparkle(canvas, Offset(w * 0.24, h * 0.18), w * 0.05, sparkle);
+      _drawSparkle(canvas, Offset(w * 0.78, h * 0.26), w * 0.04, sparkle);
+    }
+
+    // Chest body.
+    final body = RRect.fromRectAndCorners(
+      Rect.fromLTWH(w * 0.16, h * 0.46, w * 0.68, h * 0.38),
+      bottomLeft: Radius.circular(w * 0.08),
+      bottomRight: Radius.circular(w * 0.08),
+    );
+    canvas.drawRRect(
+      body,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: const [
+            Color(0xFFB07D1F),
+            Color(0xFFD4A843),
+            Color(0xFF8D6E2B),
+          ],
+        ).createShader(body.outerRect),
+    );
+    canvas.drawRRect(body, outline);
+
+    // Lid — rounded, slightly wider than the body.
+    final lid = RRect.fromRectAndCorners(
+      Rect.fromLTWH(w * 0.11, h * 0.18, w * 0.78, h * 0.32),
+      topLeft: Radius.circular(w * 0.19),
+      topRight: Radius.circular(w * 0.19),
+    );
+    canvas.drawRRect(
+      lid,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: const [
+            Color(0xFFFFF3C4),
+            Color(0xFFFFD54F),
+            Color(0xFFC78C1F),
+          ],
+        ).createShader(lid.outerRect),
+    );
+    canvas.drawRRect(lid, outline);
+
+    // Centre clasp strap.
+    final cx = w * 0.5;
+    final strapRect = Rect.fromLTRB(cx - w * 0.07, h * 0.14, cx + w * 0.07, h * 0.88);
+    canvas.drawRect(strapRect, Paint()..color = const Color(0xFFFFF3C4));
+    canvas.drawRect(
+      strapRect,
+      Paint()
+        ..color = const Color(0xFF5D3A00)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.045,
+    );
+
+    // Keyhole.
+    canvas.drawCircle(
+      Offset(cx, h * 0.55),
+      w * 0.045,
+      Paint()..color = const Color(0xFF5D3A00),
+    );
+    canvas.drawLine(
+      Offset(cx, h * 0.55),
+      Offset(cx, h * 0.68),
+      Paint()
+        ..color = const Color(0xFF5D3A00)
+        ..strokeWidth = w * 0.035
+        ..strokeCap = StrokeCap.round,
+    );
+
+    // Side straps.
+    final strapSide = Paint()..color = const Color(0xFFA97B1F);
+    canvas.drawRRect(
+      RRect.fromRectAndCorners(
+        Rect.fromLTWH(w * 0.19, h * 0.50, w * 0.10, h * 0.26),
+        topLeft: Radius.circular(w * 0.03),
+        topRight: Radius.circular(w * 0.03),
+      ),
+      strapSide,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndCorners(
+        Rect.fromLTWH(w * 0.71, h * 0.50, w * 0.10, h * 0.26),
+        topLeft: Radius.circular(w * 0.03),
+        topRight: Radius.circular(w * 0.03),
+      ),
+      strapSide,
+    );
+  }
+
+  void _drawSparkle(Canvas canvas, Offset at, double r, Paint paint) {
+    canvas.drawLine(at - Offset(r, 0), at + Offset(r, 0), paint);
+    canvas.drawLine(at - Offset(0, r), at + Offset(0, r), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TreasureChestPainter oldDelegate) =>
+      oldDelegate.glow != glow;
+}
+
+/// The golden "Treasure Found!" reward pop-up. It celebrates a freshly
+/// collected Heritage badge and the +25 point bonus, then dismisses itself.
+class _TreasurePopup extends StatefulWidget {
+  final HeritageBadge? badge;
+  final bool allTreasures;
+  final TourStage? stageComplete;
+  final String? caption;
+
+  const _TreasurePopup({
+    this.badge,
+    this.allTreasures = false,
+    this.stageComplete,
+    this.caption,
+  });
+
+  @override
+  State<_TreasurePopup> createState() => _TreasurePopupState();
+}
+
+class _TreasurePopupState extends State<_TreasurePopup>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _popIn;
+
+  @override
+  void initState() {
+    super.initState();
+    _popIn = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 650),
+    )..forward();
+    Future<void>.delayed(const Duration(milliseconds: 2100), () {
+      if (mounted) Navigator.of(context).pop();
+    });
+  }
+
+  @override
+  void dispose() {
+    _popIn.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final badge = widget.badge;
+    return Center(
+      child: ScaleTransition(
+        scale: CurvedAnimation(parent: _popIn, curve: Curves.easeOutBack),
+        child: FadeTransition(
+          opacity: CurvedAnimation(parent: _popIn, curve: Curves.easeOut),
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 36),
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(24),
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFFFFF8E1),
+                  Color(0xFFFFE082),
+                  Color(0xFFFFCA28),
+                ],
+              ),
+              border: Border.all(color: const Color(0xFFB8860B), width: 2),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFFFB300).withValues(alpha: 0.55),
+                  blurRadius: 24,
+                  spreadRadius: 4,
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const _TreasureChest(size: 72, glow: 0.35),
+                const SizedBox(height: 8),
+                const Text(
+                  "Treasure Found!",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFF5D3A00),
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                if (widget.caption != null) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Text(
+                      widget.caption!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Color(0xFF5D3A00),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                if (badge != null) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF7B4014).withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(badge.emoji, style: const TextStyle(fontSize: 18)),
+                        const SizedBox(width: 8),
+                        const Flexible(
+                          child: Text(
+                            "Heritage Badge Collected",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Color(0xFF7B4014),
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                Text(
+                  badge == null
+                      ? "All heritage badges collected!"
+                      : "+25 Points",
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFF5D3A00),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                if (widget.stageComplete != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Text(
+                      "${widget.stageComplete!.emoji} ${widget.stageComplete!.name} "
+                      "mission complete! +${widget.stageComplete!.reward} points",
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Color(0xFF5D3A00),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+                if (widget.allTreasures) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFB8860B).withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: const Text(
+                      "\u{1F451} ALL TREASURES COLLECTED!",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Color(0xFF5D3A00),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// A heavy wooden frame with corner rivets around the board surface.

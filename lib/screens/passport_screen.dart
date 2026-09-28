@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/badges_data.dart';
+import '../data/collectibles_data.dart';
 import '../data/game_data.dart';
 import '../data/india_states_data.dart';
 import '../data/journeys_data.dart';
@@ -49,6 +50,10 @@ class PassportScreen extends StatelessWidget {
                         _monumentsSection(),
                         const SizedBox(height: 14),
                         _foodsSection(),
+                        const SizedBox(height: 14),
+                        _festivalSection(),
+                        const SizedBox(height: 14),
+                        _medalSection(),
                       ],
                     ),
                   ),
@@ -534,6 +539,118 @@ class PassportScreen extends StatelessWidget {
     return _SectionCard(
       title: "FOOD COLLECTION 🍛 (${GameData.foods.length}/${indiaStates.length})",
       child: _textCollection(GameData.foods, indiaStates.map((s) => s.food)),
+    );
+  }
+
+  Widget _festivalSection() {
+    return _SectionCard(
+      title:
+          "FESTIVAL CARDS 🎉 (${GameData.festivalCards.length}/${festivalCards.length})",
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final c in festivalCards)
+            Container(
+              width: 96,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                color: GameData.festivalCards.contains(c.id)
+                    ? const Color(0x33FFB300)
+                    : Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(13),
+                border: Border.all(
+                  color: GameData.festivalCards.contains(c.id)
+                      ? const Color(0xFFFFB300).withValues(alpha: 0.8)
+                      : Colors.white.withValues(alpha: 0.10),
+                ),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    GameData.festivalCards.contains(c.id)
+                        ? "${c.emoji} ${c.name}"
+                        : "🎭 ???",
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: GameData.festivalCards.contains(c.id)
+                          ? Colors.white
+                          : Colors.white38,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      height: 1.15,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    GameData.festivalCards.contains(c.id) ? c.state : "???",
+                    style: TextStyle(
+                      color: GameData.festivalCards.contains(c.id)
+                          ? const Color(0xFFFFE082)
+                          : Colors.white24,
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _medalSection() {
+    return _SectionCard(
+      title:
+          "EXPLORER MEDALS 🎖️ (${GameData.explorerMedals.length}/${explorerMedals.length})",
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final m in explorerMedals)
+            Container(
+              width: 92,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                color: GameData.explorerMedals.contains(m.id)
+                    ? const Color(0x33CE93D8)
+                    : Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(13),
+                border: Border.all(
+                  color: GameData.explorerMedals.contains(m.id)
+                      ? const Color(0xFFCE93D8).withValues(alpha: 0.8)
+                      : Colors.white.withValues(alpha: 0.10),
+                ),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    GameData.explorerMedals.contains(m.id) ? m.emoji : "❓",
+                    style: const TextStyle(fontSize: 20),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    GameData.explorerMedals.contains(m.id) ? m.name : "???",
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: GameData.explorerMedals.contains(m.id)
+                          ? Colors.white
+                          : Colors.white38,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      height: 1.15,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 

@@ -1,25 +1,8 @@
-import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'game_data.dart';
+import '../services/game_save_service.dart';
 
+/// Backwards-compatible facade for the many existing `ProgressStore.save()`
+/// call sites. All actual save/load logic now lives in [GameSaveService].
 class ProgressStore {
-  static const String _key = "bharat_explorer_progress_v1";
-
-  static Future<void> save() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, GameData.encodeProgress());
-  }
-
-  static Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key);
-    if (raw == null || raw.isEmpty) return;
-
-    try {
-      final decoded = jsonDecode(raw) as Map<String, dynamic>;
-      GameData.loadFromJson(decoded);
-    } catch (_) {
-      // Corrupted or old save data - start fresh.
-    }
-  }
+  static Future<void> save() => GameSaveService.instance.saveGame();
+  static Future<void> load() => GameSaveService.instance.loadGame();
 }

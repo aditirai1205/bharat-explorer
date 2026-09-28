@@ -1,29 +1,18 @@
-import 'package:shared_preferences/shared_preferences.dart';
+import '../services/game_save_service.dart';
 
-/// Offline player profile saved locally with SharedPreferences.
+/// Offline player profile. A thin facade over [GameSaveService], which owns
+/// all local persistence for the explorer identity (name + email).
 class PlayerProfile {
-  static const String _nameKey = 'bharat_explorer_player_name';
-  static const String _emailKey = 'bharat_explorer_player_email';
+  static String get name => GameSaveService.instance.profileName;
+  static String get email => GameSaveService.instance.profileEmail;
 
-  static String name = '';
-  static String email = '';
+  static bool get hasProfile => GameSaveService.instance.hasProfile;
 
-  static bool get hasProfile => name.trim().isNotEmpty;
-
-  static Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    name = prefs.getString(_nameKey) ?? '';
-    email = prefs.getString(_emailKey) ?? '';
-  }
+  static Future<void> load() => GameSaveService.instance.loadGame();
 
   static Future<void> save({
     required String name,
     required String email,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_nameKey, name);
-    await prefs.setString(_emailKey, email);
-    PlayerProfile.name = name;
-    PlayerProfile.email = email;
-  }
+  }) =>
+      GameSaveService.instance.setProfile(name: name, email: email);
 }

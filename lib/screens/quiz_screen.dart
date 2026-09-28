@@ -16,10 +16,15 @@ class QuizScreen extends StatefulWidget {
   final String stateName;
   final int bonus; // bonus score attached to this quiz tile
 
+  /// Board tile this quiz belongs to — drives the question's difficulty tier
+  /// (early tiles are easy, the final stretch is hard).
+  final int tile;
+
   const QuizScreen({
     super.key,
     required this.stateName,
     this.bonus = 0,
+    this.tile = 1,
   });
 
   @override
@@ -36,45 +41,11 @@ class _QuizScreenState extends State<QuizScreen>
   @override
   void initState() {
     super.initState();
-    _question = _selectQuestion();
+    _question = pickQuizQuestion(tile: widget.tile, stateName: widget.stateName);
     _popIn = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 700),
     )..forward();
-  }
-
-  /// Picks a question for the quiz tile: prefer one this journey has NOT
-  /// asked yet (questions differ every visit), falling back to a random one
-  /// when the pool is exhausted, then remember it so repeats stay fresh.
-  Question _selectQuestion() {
-    final pool = allQuestions
-        .where((q) => q.state == widget.stateName)
-        .toList()
-      ..shuffle(math.Random());
-    final generic = widget.stateName == "India"
-        ? allQuestions.where((q) => q.state == "India").toList()
-        : <Question>[];
-    final candidates = pool.isNotEmpty
-        ? pool
-        : generic.isNotEmpty
-            ? generic
-            : [_fallbackQuestion()];
-    final unused = candidates
-        .where((q) => !GameData.usedQuestions.contains(q.question))
-        .toList();
-    final chosen = unused.isNotEmpty ? unused.first : candidates.first;
-    GameData.usedQuestions.add(chosen.question);
-    return chosen;
-  }
-
-  Question _fallbackQuestion() {
-    return const Question(
-      state: "India",
-      category: "General",
-      question: "Which is the national bird of India?",
-      options: ["Peacock", "Parrot", "Sparrow", "Crow"],
-      answer: 0,
-    );
   }
 
   @override

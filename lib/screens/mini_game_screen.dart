@@ -2,25 +2,45 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../data/collectibles_data.dart';
 import '../data/game_data.dart';
+import '../data/india_states_data.dart';
 import '../data/questions.dart';
-import '../models/question.dart';
 import '../widgets/particle_painter.dart';
 
-/// Result handed back to the board when a mini-game ends.
+/// Result handed back to the board when a Green-tile mini-game ends.
 class MiniGameResult {
   final int points;
   final List<String> badges;
+  final List<String> festivalCards;
+  final List<String> explorerMedals;
+  final List<String> foods;
+  final List<String> monuments;
 
-  const MiniGameResult({required this.points, this.badges = const []});
+  const MiniGameResult({
+    this.points = 0,
+    this.badges = const [],
+    this.festivalCards = const [],
+    this.explorerMedals = const [],
+    this.foods = const [],
+    this.monuments = const [],
+  });
 }
 
-enum _MiniGameMode { oddOneOut, matchMonument, memoryMatch, spinWheel }
+enum _MiniGameMode {
+  statePuzzle,
+  findTheState,
+  matchFood,
+  festivalMatch,
+  spotMonument,
+  memoryCapital,
+}
 
-/// A Green-tile mini-game, picked at random: "Odd One Out", "Match the
-/// Monument", a "Memory Match" card puzzle or the "Spin Wheel" luck bonus.
-/// Completing any of them rewards points — and the wheel can even hand out a
-/// Heritage Badge. The player can always retry until they clear the game.
+/// A Green Challenge tile opens one short educational mini-game picked at
+/// random: unscramble a State Puzzle, Find the State from a clue, Match the
+/// Food to its state, Match a Festival to its state, Spot the Monument, or a
+/// State ↔ Capital Memory Card grid. Rewards shrink with every retry and the
+/// player can always retry until the game is cleared.
 class MiniGameScreen extends StatefulWidget {
   const MiniGameScreen({super.key});
 
@@ -34,7 +54,8 @@ class _MiniGameScreenState extends State<MiniGameScreen> {
   @override
   void initState() {
     super.initState();
-    _mode = _MiniGameMode.values[math.Random().nextInt(_MiniGameMode.values.length)];
+    _mode =
+        _MiniGameMode.values[math.Random().nextInt(_MiniGameMode.values.length)];
   }
 
   void _close(MiniGameResult result) => Navigator.of(context).pop(result);
@@ -65,11 +86,18 @@ class _MiniGameScreenState extends State<MiniGameScreen> {
                       AnimatedSwitcher(
                         duration: const Duration(milliseconds: 320),
                         child: switch (_mode) {
-                          _MiniGameMode.oddOneOut => _OddOneOut(onDone: _close),
-                          _MiniGameMode.matchMonument =>
-                            _MatchMonument(onDone: _close),
-                          _MiniGameMode.memoryMatch => _MemoryMatch(onDone: _close),
-                          _MiniGameMode.spinWheel => _SpinWheel(onDone: _close),
+                          _MiniGameMode.statePuzzle =>
+                            _StatePuzzle(onDone: _close),
+                          _MiniGameMode.findTheState =>
+                            _FindTheState(onDone: _close),
+                          _MiniGameMode.matchFood =>
+                            _MatchFood(onDone: _close),
+                          _MiniGameMode.festivalMatch =>
+                            _FestivalMatch(onDone: _close),
+                          _MiniGameMode.spotMonument =>
+                            _SpotMonument(onDone: _close),
+                          _MiniGameMode.memoryCapital =>
+                            _MemoryCapital(onDone: _close),
                         },
                       ),
                     ],
@@ -85,10 +113,12 @@ class _MiniGameScreenState extends State<MiniGameScreen> {
 
   Widget _header() {
     final String title = switch (_mode) {
-      _MiniGameMode.oddOneOut => "ODD ONE OUT",
-      _MiniGameMode.matchMonument => "MATCH THE MONUMENT",
-      _MiniGameMode.memoryMatch => "MEMORY MATCH",
-      _MiniGameMode.spinWheel => "SPIN WHEEL BONUS",
+      _MiniGameMode.statePuzzle => "STATE PUZZLE",
+      _MiniGameMode.findTheState => "FIND THE STATE",
+      _MiniGameMode.matchFood => "MATCH THE FOOD",
+      _MiniGameMode.festivalMatch => "FESTIVAL MATCH",
+      _MiniGameMode.spotMonument => "SPOT THE MONUMENT",
+      _MiniGameMode.memoryCapital => "MEMORY CARD",
     };
     return Row(
       children: [
@@ -123,7 +153,8 @@ class _MiniGameScreenState extends State<MiniGameScreen> {
           children: [
             const Text(
               "SCORE",
-              style: TextStyle(color: Colors.white54, fontSize: 11, letterSpacing: 2),
+              style:
+                  TextStyle(color: Colors.white54, fontSize: 11, letterSpacing: 2),
             ),
             Text(
               '${GameData.score}',
@@ -197,210 +228,186 @@ class _GameCard extends StatelessWidget {
   }
 }
 
-/// MCQ-style "pick the intruder" question. The player retries until correct;
-/// the reward shrinks with extra attempts.
-class _OddOneOut extends StatefulWidget {
-  final ValueChanged<MiniGameResult> onDone;
+const List<String> _stateCandidates = [
+  "Andhra Pradesh",
+  "Assam",
+  "Bihar",
+  "Delhi",
+  "Gujarat",
+  "Himachal Pradesh",
+  "Jammu & Kashmir",
+  "Karnataka",
+  "Kerala",
+  "Ladakh",
+  "Madhya Pradesh",
+  "Maharashtra",
+  "Odisha",
+  "Punjab",
+  "Rajasthan",
+  "Tamil Nadu",
+  "Telangana",
+  "Uttar Pradesh",
+  "Uttarakhand",
+  "West Bengal",
+];
 
-  const _OddOneOut({required this.onDone});
-
-  @override
-  State<_OddOneOut> createState() => _OddOneOutState();
+List<String> _fourOptions(math.Random rng, String correct, List<String> pool) {
+  final others = pool.where((o) => o != correct).toList()..shuffle(rng);
+  final options = <String>[correct];
+  for (final o in others) {
+    if (!options.contains(o)) options.add(o);
+    if (options.length == 4) break;
+  }
+  options.shuffle(rng);
+  return options;
 }
 
-class _OddOneOutState extends State<_OddOneOut> {
-  final math.Random _rng = math.Random();
-  late final Question _q;
-  int _attempts = 0;
-  int? _picked;
-  bool _solved = false;
+int _firstTryReward(int attempts) => attempts == 1 ? 10 : 6;
 
-  @override
-  void initState() {
-    super.initState();
-    final pool = oddOneOutPool.toList()..shuffle(_rng);
-    Question? q;
-    for (final candidate in pool) {
-      if (!GameData.usedQuestions.contains(candidate.question)) {
-        q = candidate;
-        break;
-      }
-    }
-    _q = q ?? oddOneOutPool.first;
-    GameData.usedQuestions.add(_q.question);
-  }
-
-  void _pick(int i) {
-    if (_solved) return;
-    setState(() {
-      _attempts++;
-      _picked = i;
-      if (i == _q.answer) {
-        _solved = true;
-        if (_attempts == 1) {
-          GameData.correctAnswers++;
-        }
-      } else {
-        GameData.wrongAnswers++;
-      }
-    });
-  }
-
-  int get _reward => _solved ? (_attempts == 1 ? 10 : 6) : 0;
-
-  @override
-  Widget build(BuildContext context) {
-    return _GameCard(
-      title: "ODD ONE OUT",
-      subtitle: "Find the option that does NOT belong.",
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-            decoration: BoxDecoration(
-              color: const Color(0xFF90EE90).withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Text(
-              _q.category.toUpperCase(),
-              style: const TextStyle(
-                color: Color(0xFFA5D6A7),
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 2,
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            _q.question,
+Widget _rewardBanner(String text) {
+  return Container(
+    padding: const EdgeInsets.all(13),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(14),
+      gradient: const LinearGradient(
+        colors: [Color(0xFF1B5E20), Color(0xFF2E7D32)],
+      ),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.check_circle_rounded, color: Colors.white, size: 26),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 19,
-              fontWeight: FontWeight.w800,
-              height: 1.35,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: 18),
-          for (int i = 0; i < _q.options.length; i++) ...[
-            _option(i),
-            if (i != _q.options.length - 1) const SizedBox(height: 10),
-          ],
-          const SizedBox(height: 16),
-          if (_solved) ..._solvedWidgets(),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _claimButton(String label, VoidCallback onTap) {
+  return SizedBox(
+    width: double.infinity,
+    height: 52,
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(26),
+        gradient:
+            const LinearGradient(colors: [Color(0xFF43A047), Color(0xFF1B5E20)]),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(26),
+          onTap: onTap,
+          child: Center(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.5,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+Widget _mcqOption({
+  required int i,
+  required int optionCount,
+  required List<String> options,
+  required int? picked,
+  required bool solved,
+  required int answer,
+  required VoidCallback onTap,
+}) {
+  final isAnswer = i == answer;
+  final isPicked = i == picked;
+  Color? bg;
+  if (solved) {
+    bg = isAnswer
+        ? const Color(0xFF2E7D32)
+        : isPicked
+            ? const Color(0xFFC62828)
+            : Colors.white.withValues(alpha: 0.06);
+  } else if (isPicked) {
+    bg = const Color(0xFFC62828).withValues(alpha: 0.45);
+  } else {
+    bg = Colors.white.withValues(alpha: 0.08);
+  }
+  return GestureDetector(
+    onTap: onTap,
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 280),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: solved && isAnswer
+              ? const Color(0xFF66BB6A)
+              : isPicked && !solved
+                  ? const Color(0xFFEF5350)
+                  : Colors.white.withValues(alpha: 0.18),
+          width: (solved && isAnswer) || (isPicked && !solved) ? 1.8 : 1.2,
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              options[i],
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          if (solved && isAnswer)
+            const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20)
+          else if (!solved && !isPicked)
+            Text(
+              String.fromCharCode(65 + i),
+              style: TextStyle(
+                color: Colors.white38,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
         ],
       ),
-    );
-  }
-
-  List<Widget> _solvedWidgets() {
-    return [
-      Container(
-        padding: const EdgeInsets.all(13),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          gradient: const LinearGradient(
-            colors: [Color(0xFF1B5E20), Color(0xFF2E7D32)],
-          ),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.error_outline_rounded, color: Colors.white, size: 26),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                "Well spotted! You earned +$_reward points.",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 12),
-      _claimButton("CLAIM +$_reward", () => widget.onDone(MiniGameResult(points: _reward))),
-    ];
-  }
-
-  Widget _option(int i) {
-    final isAnswer = i == _q.answer;
-    final isPicked = i == _picked;
-    Color? bg;
-    if (_solved) {
-      bg = isAnswer
-          ? const Color(0xFF2E7D32)
-          : isPicked
-              ? const Color(0xFFC62828)
-              : Colors.white.withValues(alpha: 0.06);
-    } else if (isPicked) {
-      bg = const Color(0xFFC62828).withValues(alpha: 0.45);
-    } else {
-      bg = Colors.white.withValues(alpha: 0.08);
-    }
-    return GestureDetector(
-      onTap: () => _pick(i),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 280),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: _solved && isAnswer
-                ? const Color(0xFF66BB6A)
-                : isPicked && !_solved
-                    ? const Color(0xFFEF5350)
-                    : Colors.white.withValues(alpha: 0.18),
-            width: (_solved && isAnswer) || (isPicked && !_solved) ? 1.8 : 1.2,
-          ),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                _q.options[i],
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            if (_solved && isAnswer)
-              const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20)
-            else if (!_solved && !isPicked)
-              Text(
-                String.fromCharCode(65 + i),
-                style: TextStyle(
-                  color: Colors.white38,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
+    ),
+  );
 }
 
-/// Guess which state owns the monument shown.
-class _MatchMonument extends StatefulWidget {
+/// Unscramble the letters of a hidden state name.
+class _StatePuzzle extends StatefulWidget {
   final ValueChanged<MiniGameResult> onDone;
 
-  const _MatchMonument({required this.onDone});
+  const _StatePuzzle({required this.onDone});
 
   @override
-  State<_MatchMonument> createState() => _MatchMonumentState();
+  State<_StatePuzzle> createState() => _StatePuzzleState();
 }
 
-class _MatchMonumentState extends State<_MatchMonument> {
+class _StatePuzzleState extends State<_StatePuzzle> {
   final math.Random _rng = math.Random();
-  late final Question _q;
-  late final String _monument;
+  late final String _state;
+  late final String _scramble;
+  late final List<String> _options;
+  int _answer = 0;
   int _attempts = 0;
   int? _picked;
   bool _solved = false;
@@ -408,193 +415,536 @@ class _MatchMonumentState extends State<_MatchMonument> {
   @override
   void initState() {
     super.initState();
-    final pairs = monumentStatePairs.toList()..shuffle(_rng);
-    final pair = pairs.first;
-    _monument = "«${pair.$1}»";
-    final distractors = statesFromPairs(pairs)
-        .where((s) => s != pair.$2)
-        .take(3)
-        .toList();
-    final options = ([pair.$2, ...distractors].toList()..shuffle(_rng));
-    _q = Question(
-      state: pair.$2,
-      category: "Match the Monument",
-      question: "«${pair.$1}» is the pride of which state?",
-      options: options,
-      answer: options.indexOf(pair.$2),
-    );
-    GameData.usedQuestions.add(_q.question);
+    _state = stateNames[_rng.nextInt(stateNames.length)];
+    var letters = _state.replaceAll(' ', '').split('')..shuffle(_rng);
+    while (letters.join() == _state.replaceAll(' ', '')) {
+      letters = _state.replaceAll(' ', '').split('')..shuffle(_rng);
+    }
+    _scramble = letters.join().toUpperCase();
+    _options = _fourOptions(_rng, _state,
+        stateNames.where((s) => s != _state).toList());
+    _answer = _options.indexOf(_state);
   }
 
-  List<String> statesFromPairs(List<(String, String)> pairs) {
-    final names = <String>[];
-    for (final p in pairs) {
-      if (!names.contains(p.$2)) names.add(p.$2);
-    }
-    return names;
-  }
+  int get _reward => _solved ? _firstTryReward(_attempts) : 0;
 
   void _pick(int i) {
     if (_solved) return;
     setState(() {
       _attempts++;
       _picked = i;
-      if (i == _q.answer) {
+      if (i == _answer) {
         _solved = true;
-        if (_attempts == 1) {
-          GameData.correctAnswers++;
-        }
+        if (_attempts == 1) GameData.correctAnswers++;
       } else {
         GameData.wrongAnswers++;
       }
     });
   }
 
-  int get _reward => _solved ? (_attempts == 1 ? 10 : 6) : 0;
-
   @override
   Widget build(BuildContext context) {
     return _GameCard(
-      title: "MATCH THE MONUMENT",
-      subtitle: "Pair the wonder of India with its state.",
+      title: "STATE PUZZLE",
+      subtitle: "Unscramble the letters to find the hidden state.",
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Center(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
               decoration: BoxDecoration(
                 color: const Color(0xFF90EE90).withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(18),
               ),
               child: Text(
-                _monument,
+                _scramble,
+                textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 3,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          for (int i = 0; i < _options.length; i++) ...[
+            _mcqOption(
+              i: i,
+              optionCount: _options.length,
+              options: _options,
+              picked: _picked,
+              solved: _solved,
+              answer: _answer,
+              onTap: () => _pick(i),
+            ),
+            if (i != _options.length - 1) const SizedBox(height: 10),
+          ],
+          const SizedBox(height: 16),
+          if (_solved) ...[
+            _rewardBanner("Nice! +$_reward points from $_state."),
+            const SizedBox(height: 12),
+            _claimButton(
+              "CLAIM +$_reward",
+              () => widget.onDone(MiniGameResult(points: _reward)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Find the state from a landmark or fun-fact clue.
+class _FindTheState extends StatefulWidget {
+  final ValueChanged<MiniGameResult> onDone;
+
+  const _FindTheState({required this.onDone});
+
+  @override
+  State<_FindTheState> createState() => _FindTheStateState();
+}
+
+class _FindTheStateState extends State<_FindTheState> {
+  final math.Random _rng = math.Random();
+  late final String _prompt;
+  late final String _emoji;
+  int _attempts = 0;
+  int? _picked;
+  bool _solved = false;
+  late final List<String> _options;
+  late final int _answer;
+  late final String _correctState;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_rng.nextBool()) {
+      final pair =
+          monumentStatePairs[_rng.nextInt(monumentStatePairs.length)];
+      _correctState = pair.$2;
+      _emoji = "\u{1F3DB}";
+      _prompt = "The monument \u00AB${pair.$1}\u00BB stands in which state?";
+    } else {
+      final pool = indiaStates
+          .where((s) =>
+              s.facts.isNotEmpty && _stateCandidates.contains(s.name))
+          .toList();
+      final s = pool[_rng.nextInt(pool.length)];
+      _correctState = s.name;
+      _emoji = "\u{1F525}";
+      _prompt = s.facts[_rng.nextInt(s.facts.length)];
+    }
+    _options =
+        _fourOptions(_rng, _correctState, List.of(_stateCandidates));
+    _answer = _options.indexOf(_correctState);
+    GameData.usedQuestions.add(_prompt);
+  }
+
+  int get _reward => _solved ? _firstTryReward(_attempts) : 0;
+
+  void _pick(int i) {
+    if (_solved) return;
+    setState(() {
+      _attempts++;
+      _picked = i;
+      if (i == _answer) {
+        _solved = true;
+        if (_attempts == 1) GameData.correctAnswers++;
+      } else {
+        GameData.wrongAnswers++;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _GameCard(
+      title: "FIND THE STATE",
+      subtitle: "Read the clue and spot the right state.",
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF90EE90).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Text(
+              "$_emoji $_prompt",
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                height: 1.4,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          for (int i = 0; i < _options.length; i++) ...[
+            _mcqOption(
+              i: i,
+              optionCount: _options.length,
+              options: _options,
+              picked: _picked,
+              solved: _solved,
+              answer: _answer,
+              onTap: () => _pick(i),
+            ),
+            if (i != _options.length - 1) const SizedBox(height: 10),
+          ],
+          const SizedBox(height: 16),
+          if (_solved) ...[
+            _rewardBanner("Found it! +$_reward points \u2014 $_correctState"),
+            const SizedBox(height: 12),
+            _claimButton(
+              "CLAIM +$_reward",
+              () => widget.onDone(MiniGameResult(points: _reward)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Match a famous dish to the state that serves it.
+class _MatchFood extends StatefulWidget {
+  final ValueChanged<MiniGameResult> onDone;
+
+  const _MatchFood({required this.onDone});
+
+  @override
+  State<_MatchFood> createState() => _MatchFoodState();
+}
+
+class _MatchFoodState extends State<_MatchFood> {
+  final math.Random _rng = math.Random();
+  late final (String, String) _pair;
+  late final List<String> _options;
+  late final int _answer;
+  int _attempts = 0;
+  int? _picked;
+  bool _solved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pair = foodStatePairs[_rng.nextInt(foodStatePairs.length)];
+    final states = foodStatePairs.map((p) => p.$2).toSet().toList();
+    _options = _fourOptions(_rng, _pair.$2, states);
+    _answer = _options.indexOf(_pair.$2);
+    final q = "The dish \u00AB${_pair.$1}\u00BB is famous in which state?";
+    GameData.usedQuestions.add(q);
+  }
+
+  int get _reward => _solved ? _firstTryReward(_attempts) : 0;
+
+  void _pick(int i) {
+    if (_solved) return;
+    setState(() {
+      _attempts++;
+      _picked = i;
+      if (i == _answer) {
+        _solved = true;
+        if (_attempts == 1) GameData.correctAnswers++;
+      } else {
+        GameData.wrongAnswers++;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _GameCard(
+      title: "MATCH THE FOOD",
+      subtitle: "Where does this famous dish call home?",
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF90EE90).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Text(
+                "\u{1F35B} ${_pair.$1}",
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 21,
                   fontWeight: FontWeight.w900,
                 ),
               ),
             ),
           ),
           const SizedBox(height: 18),
-          for (int i = 0; i < _q.options.length; i++) ...[
-            _option(i),
-            if (i != _q.options.length - 1) const SizedBox(height: 10),
+          for (int i = 0; i < _options.length; i++) ...[
+            _mcqOption(
+              i: i,
+              optionCount: _options.length,
+              options: _options,
+              picked: _picked,
+              solved: _solved,
+              answer: _answer,
+              onTap: () => _pick(i),
+            ),
+            if (i != _options.length - 1) const SizedBox(height: 10),
           ],
           const SizedBox(height: 16),
-          if (_solved) ..._solvedWidgets(),
+          if (_solved) ...[
+            _rewardBanner(
+                "Tasty! Found the dish of ${_pair.$2} \u2014 +$_reward points."),
+            const SizedBox(height: 12),
+            _claimButton(
+              "CLAIM +$_reward",
+              () => widget.onDone(MiniGameResult(
+                points: _reward,
+                foods: [_pair.$1],
+              )),
+            ),
+          ],
         ],
       ),
     );
   }
+}
 
-  List<Widget> _solvedWidgets() {
-    return [
-      Container(
-        padding: const EdgeInsets.all(13),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          gradient: const LinearGradient(
-            colors: [Color(0xFF1B5E20), Color(0xFF2E7D32)],
-          ),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.emoji_events_rounded, color: Colors.white, size: 26),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                "Correct! +\n$_reward points.",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 12),
-      _claimButton("CLAIM +$_reward", () => widget.onDone(MiniGameResult(points: _reward))),
-    ];
+/// Match a festival to the state that celebrates it most.
+class _FestivalMatch extends StatefulWidget {
+  final ValueChanged<MiniGameResult> onDone;
+
+  const _FestivalMatch({required this.onDone});
+
+  @override
+  State<_FestivalMatch> createState() => _FestivalMatchState();
+}
+
+class _FestivalMatchState extends State<_FestivalMatch> {
+  final math.Random _rng = math.Random();
+  late final (String, String) _pair;
+  late final String _cardId;
+  late final List<String> _options;
+  late final int _answer;
+  int _attempts = 0;
+  int? _picked;
+  bool _solved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pair = festivalStatePairs[_rng.nextInt(festivalStatePairs.length)];
+    final card = festivalCards
+        .where((c) => c.name == _pair.$1 && c.state == _pair.$2)
+        .toList();
+    _cardId = card.isNotEmpty ? card.first.id : _pair.$1;
+    final states = festivalStatePairs.map((p) => p.$2).toSet().toList();
+    _options = _fourOptions(_rng, _pair.$2, states);
+    _answer = _options.indexOf(_pair.$2);
+    final q =
+        "The festival \u00AB${_pair.$1}\u00BB is celebrated most in which state?";
+    GameData.usedQuestions.add(q);
   }
 
-  Widget _option(int i) {
-    final isAnswer = i == _q.answer;
-    final isPicked = i == _picked;
-    Color? bg;
-    if (_solved) {
-      bg = isAnswer
-          ? const Color(0xFF2E7D32)
-          : isPicked
-              ? const Color(0xFFC62828)
-              : Colors.white.withValues(alpha: 0.06);
-    } else if (isPicked) {
-      bg = const Color(0xFFC62828).withValues(alpha: 0.45);
-    } else {
-      bg = Colors.white.withValues(alpha: 0.08);
-    }
-    return GestureDetector(
-      onTap: () => _pick(i),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 280),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: _solved && isAnswer
-                ? const Color(0xFF66BB6A)
-                : isPicked && !_solved
-                    ? const Color(0xFFEF5350)
-                    : Colors.white.withValues(alpha: 0.18),
-            width: (_solved && isAnswer) || (isPicked && !_solved) ? 1.8 : 1.2,
-          ),
-        ),
-        child: Row(
-          children: [
-            Expanded(
+  int get _reward => _solved ? _firstTryReward(_attempts) : 0;
+
+  void _pick(int i) {
+    if (_solved) return;
+    setState(() {
+      _attempts++;
+      _picked = i;
+      if (i == _answer) {
+        _solved = true;
+        if (_attempts == 1) GameData.correctAnswers++;
+      } else {
+        GameData.wrongAnswers++;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _GameCard(
+      title: "FESTIVAL MATCH",
+      subtitle: "Where does this celebration light up the sky?",
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF90EE90).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(18),
+              ),
               child: Text(
-                _q.options[i],
+                "\u{1F389} ${_pair.$1}",
+                textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 21,
+                  fontWeight: FontWeight.w900,
                 ),
               ),
             ),
-            if (_solved && isAnswer)
-              const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20)
-            else if (!isPicked && !_solved)
-              Text(
-                String.fromCharCode(65 + i),
-                style: TextStyle(
-                  color: Colors.white38,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
+          ),
+          const SizedBox(height: 18),
+          for (int i = 0; i < _options.length; i++) ...[
+            _mcqOption(
+              i: i,
+              optionCount: _options.length,
+              options: _options,
+              picked: _picked,
+              solved: _solved,
+              answer: _answer,
+              onTap: () => _pick(i),
+            ),
+            if (i != _options.length - 1) const SizedBox(height: 10),
           ],
-        ),
+          const SizedBox(height: 16),
+          if (_solved) ...[
+            _rewardBanner(
+                "It's a celebration! +$_reward points \u2014 and a Festival Card!"),
+            const SizedBox(height: 12),
+            _claimButton(
+              "CLAIM +$_reward",
+              () => widget.onDone(MiniGameResult(
+                points: _reward,
+                festivalCards: [_cardId],
+              )),
+            ),
+          ],
+        ],
       ),
     );
   }
 }
 
-/// Flip-and-match card grid: pair each monument with its state.
-class _MemoryMatch extends StatefulWidget {
+/// Spot the monument that is the pride of the shown state.
+class _SpotMonument extends StatefulWidget {
   final ValueChanged<MiniGameResult> onDone;
 
-  const _MemoryMatch({required this.onDone});
+  const _SpotMonument({required this.onDone});
 
   @override
-  State<_MemoryMatch> createState() => _MemoryMatchState();
+  State<_SpotMonument> createState() => _SpotMonumentState();
 }
 
-class _MemoryMatchState extends State<_MemoryMatch> {
+class _SpotMonumentState extends State<_SpotMonument> {
   final math.Random _rng = math.Random();
+  late final (String, String) _pair;
+  late final List<String> _options;
+  late final int _answer;
+  int _attempts = 0;
+  int? _picked;
+  bool _solved = false;
 
+  @override
+  void initState() {
+    super.initState();
+    _pair = monumentStatePairs[_rng.nextInt(monumentStatePairs.length)];
+    final monuments = monumentStatePairs.map((p) => p.$1).toList();
+    _options = _fourOptions(_rng, _pair.$1, monuments);
+    _answer = _options.indexOf(_pair.$1);
+    final q = "Which monument is the pride of ${_pair.$2}?";
+    GameData.usedQuestions.add(q);
+  }
+
+  int get _reward => _solved ? _firstTryReward(_attempts) : 0;
+
+  void _pick(int i) {
+    if (_solved) return;
+    setState(() {
+      _attempts++;
+      _picked = i;
+      if (i == _answer) {
+        _solved = true;
+        if (_attempts == 1) GameData.correctAnswers++;
+      } else {
+        GameData.wrongAnswers++;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _GameCard(
+      title: "SPOT THE MONUMENT",
+      subtitle: "Pick the wonder that shines in the shown state.",
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF90EE90).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Text(
+                "\u{1F3DB} ${_pair.$2}",
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 21,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          for (int i = 0; i < _options.length; i++) ...[
+            _mcqOption(
+              i: i,
+              optionCount: _options.length,
+              options: _options,
+              picked: _picked,
+              solved: _solved,
+              answer: _answer,
+              onTap: () => _pick(i),
+            ),
+            if (i != _options.length - 1) const SizedBox(height: 10),
+          ],
+          const SizedBox(height: 16),
+          if (_solved) ...[
+            _rewardBanner(
+                "Wonder spotted! +$_reward points \u2014 ${_pair.$1} discovered."),
+            const SizedBox(height: 12),
+            _claimButton(
+              "CLAIM +$_reward",
+              () => widget.onDone(MiniGameResult(
+                points: _reward,
+                monuments: [_pair.$1],
+              )),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Flip-and-match memory grid pairing each state with its capital city.
+class _MemoryCapital extends StatefulWidget {
+  final ValueChanged<MiniGameResult> onDone;
+
+  const _MemoryCapital({required this.onDone});
+
+  @override
+  State<_MemoryCapital> createState() => _MemoryCapitalState();
+}
+
+class _MemoryCapitalState extends State<_MemoryCapital> {
+  final math.Random _rng = math.Random();
   late final List<_MemoryCard> _cards;
   final Set<int> _matched = {};
   final List<int> _flipped = [];
@@ -605,12 +955,12 @@ class _MemoryMatchState extends State<_MemoryMatch> {
   @override
   void initState() {
     super.initState();
-    final pairs = monumentStatePairs.toList()..shuffle(_rng);
+    final pairs = capitalStatePairs.toList()..shuffle(_rng);
     final chosen = pairs.take(6).toList();
     final cards = <_MemoryCard>[];
     for (int p = 0; p < chosen.length; p++) {
-      cards.add(_MemoryCard(pairId: p, label: "🏛️ ${chosen[p].$1}"));
-      cards.add(_MemoryCard(pairId: p, label: "🗺️ ${chosen[p].$2}"));
+      cards.add(_MemoryCard(pairId: p, label: "\u{1F5FA} ${chosen[p].$1}"));
+      cards.add(_MemoryCard(pairId: p, label: "\u{1F3D9} ${chosen[p].$2}"));
     }
     cards.shuffle(_rng);
     _cards = cards;
@@ -648,10 +998,10 @@ class _MemoryMatchState extends State<_MemoryMatch> {
   @override
   Widget build(BuildContext context) {
     return _GameCard(
-      title: "MEMORY MATCH",
+      title: "MEMORY CARD",
       subtitle: _done
-          ? "All pairs found in $_moves moves!"
-          : "Flip cards to match every monument (🏛️) with its state (🗺️).",
+          ? "Every state matched its capital in $_moves moves!"
+          : "Flip cards to match every state (\u{1F5FA}) with its capital (\u{1F3D9}).",
       child: Column(
         children: [
           GridView.count(
@@ -667,35 +1017,16 @@ class _MemoryMatchState extends State<_MemoryMatch> {
           ),
           const SizedBox(height: 16),
           if (_done) ...[
-            Container(
-              padding: const EdgeInsets.all(13),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF1B5E20), Color(0xFF2E7D32)],
-                ),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.psychology_rounded, color: Colors.white, size: 26),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      "Outstanding memory! +$_reward points.",
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            _rewardBanner(
+              "Outstanding memory! +$_reward points \u2014 and an Explorer Medal!",
             ),
             const SizedBox(height: 12),
             _claimButton(
               "CLAIM +$_reward",
-              () => widget.onDone(MiniGameResult(points: _reward)),
+              () => widget.onDone(MiniGameResult(
+                points: _reward,
+                explorerMedals: const ["memory_master"],
+              )),
             ),
           ] else
             Text(
@@ -754,180 +1085,10 @@ class _MemoryMatchState extends State<_MemoryMatch> {
                   border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
                 ),
                 child: const Text(
-                  "❓",
+                  "\u2753",
                   style: TextStyle(fontSize: 26),
                 ),
               ),
-      ),
-    );
-  }
-}
-
-/// Animated lucky-wheel bonus — points or a Heritage Badge.
-class _SpinWheel extends StatefulWidget {
-  final ValueChanged<MiniGameResult> onDone;
-
-  const _SpinWheel({required this.onDone});
-
-  @override
-  State<_SpinWheel> createState() => _SpinWheelState();
-}
-
-class _SpinWheelState extends State<_SpinWheel>
-    with SingleTickerProviderStateMixin {
-  static const List<(int, String)> _segments = [
-    (0, "TIGER 🐅"),
-    (10, "TEMPLE 🛕"),
-    (4, "COAST 🌊"),
-    (12, "FORT 🏯"),
-    (5, "FEAST 🍽️"),
-    (10, "GUARDIAN 🏛️"),
-    (8, "PARK 🦁"),
-    (12, "RIVER 🌊"),
-  ];
-
-  late final AnimationController _spin;
-  late final math.Random _rng;
-  int _finalExtra = 0;
-  bool _started = false;
-  bool _settled = false;
-  String? _resultText;
-  int _points = 0;
-  String? _badgeId;
-
-  @override
-  void initState() {
-    super.initState();
-    _rng = math.Random();
-    _spin = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 3200),
-    )..addStatusListener((status) {
-        if (status == AnimationStatus.completed) _settle();
-      });
-  }
-
-  @override
-  void dispose() {
-    _spin.dispose();
-    super.dispose();
-  }
-
-  void _go() {
-    if (_started) return;
-    _finalExtra = _rng.nextInt(360);
-    setState(() {
-      _started = true;
-      _settled = false;
-    });
-    _spin.forward(from: 0);
-  }
-
-  void _settle() {
-    // Marker sits at the top (screen angle -90 in our local convention). After
-    // the wheel turns A degrees clockwise, the segment under the marker is the
-    // one whose local angle phi satisfies phi + A = -90 (mod 360).
-    final deg = _finalExtra % 360;
-    final phi = (270 - deg) % 360;
-    final idx = ((phi + 90) / 45).floor() % _segments.length;
-    final seg = _segments[idx];
-    setState(() {
-      _settled = true;
-      if (seg.$1 > 0) {
-        _points = seg.$1;
-        _resultText = "+${seg.$1} points!";
-      } else {
-        _badgeId = "tiger";
-        _resultText = "Heritage Badge unlocked!";
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return _GameCard(
-      title: "SPIN WHEEL BONUS",
-      subtitle: "Lucky spin — points or a Heritage Badge!",
-      child: Column(
-        children: [
-          SizedBox(
-            width: 240,
-            height: 240,
-            child: AnimatedBuilder(
-              animation: _spin,
-              builder: (context, child) {
-                return Transform.rotate(
-                  angle: _spin.value * math.pi * 2 * 6 +
-                      _finalExtra * math.pi / 180 * _spin.value,
-                  child: child,
-                );
-              },
-              child: CustomPaint(
-                painter: _WheelPainter(_segments),
-                child: Center(
-                  child: Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: const RadialGradient(
-                        colors: [Color(0xFFFFD54F), Color(0xFFF57F17)],
-                      ),
-                      border: Border.all(color: Colors.white, width: 3),
-                    ),
-                    child: const Center(
-                      child: Text(
-                        "🍀",
-                        style: TextStyle(fontSize: 26),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (_settled)
-            Container(
-              padding: const EdgeInsets.all(13),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF1B5E20), Color(0xFF2E7D32)],
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    _badgeId != null ? Icons.workspace_premium_rounded : Icons.stars_rounded,
-                    color: Colors.white,
-                    size: 26,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      "You landed on $_resultText",
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 12),
-          if (_settled)
-            _claimButton(
-              _points > 0 ? "CLAIM +$_points" : "UNLOCK & CLAIM",
-              () => widget.onDone(
-                MiniGameResult(points: _points, badges: _badgeId != null ? [_badgeId!] : const []),
-              ),
-            )
-          else
-            _claimButton("SPIN  🎡", _go),
-        ],
       ),
     );
   }
@@ -938,99 +1099,4 @@ class _MemoryCard {
   final String label;
 
   const _MemoryCard({required this.pairId, required this.label});
-}
-
-class _WheelPainter extends CustomPainter {
-  final List<(int, String)> segments;
-
-  const _WheelPainter(this.segments);
-
-  static const List<Color> _colors = [
-    Color(0xFFE53935),
-    Color(0xFFFB8C00),
-    Color(0xFFFDD835),
-    Color(0xFF43A047),
-    Color(0xFF1E88E5),
-    Color(0xFF8E24AA),
-    Color(0xFF00ACC1),
-    Color(0xFF6D4C41),
-  ];
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromCircle(
-      center: Offset(size.width / 2, size.height / 2),
-      radius: size.width / 2.2,
-    );
-    final sweep = 2 * math.pi / segments.length;
-    for (int i = 0; i < segments.length; i++) {
-      final start = i * sweep - math.pi / 2;
-      canvas.drawArc(
-        rect,
-        start + 0.02,
-        sweep - 0.04,
-        true,
-        Paint()..color = _colors[i % _colors.length],
-      );
-      final mid = start + sweep / 2;
-      final labelPoint = Offset(
-        rect.center.dx + math.cos(mid) * rect.width * 0.30,
-        rect.center.dy + math.sin(mid) * rect.width * 0.30,
-      );
-      final tp = TextPainter(
-        text: TextSpan(
-          text: segments[i].$2,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 11,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(
-        canvas,
-        labelPoint - Offset(tp.width / 2, tp.height / 2),
-      );
-    }
-    final border = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3
-      ..color = Colors.white70;
-    canvas.drawCircle(rect.center, rect.width / 2, border);
-  }
-
-  @override
-  bool shouldRepaint(covariant _WheelPainter oldDelegate) => false;
-}
-
-Widget _claimButton(String label, VoidCallback onTap) {
-  return SizedBox(
-    width: double.infinity,
-    height: 52,
-    child: DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
-        gradient: const LinearGradient(colors: [Color(0xFF43A047), Color(0xFF1B5E20)]),
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(26),
-          onTap: onTap,
-          child: Center(
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 1.5,
-              ),
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
 }

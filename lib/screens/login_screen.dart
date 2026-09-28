@@ -6,6 +6,7 @@ import '../data/player_profile.dart';
 import '../widgets/india_slideshow_background.dart';
 import '../widgets/particle_painter.dart';
 import 'story_screen.dart';
+import 'teacher_login_screen.dart';
 
 /// Login gate of the journey — an 8-scene hand-painted monument slideshow
 /// (Taj Mahal, India Gate, Gateway of India, Hawa Mahal, Charminar,
@@ -209,6 +210,40 @@ class _LoginScreenState extends State<LoginScreen>
                   fontSize: 12,
                   color: Colors.white60,
                   letterSpacing: 0.6,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Divider(color: Colors.white.withValues(alpha: 0.15), height: 1),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const TeacherLoginScreen(),
+                      ),
+                    );
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFFFFCC80),
+                    side: BorderSide(
+                      color: const Color(0xFFFFB300).withValues(alpha: 0.55),
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    backgroundColor: Colors.white.withValues(alpha: 0.04),
+                  ),
+                  icon: const Icon(Icons.school_outlined, size: 19),
+                  label: const Text(
+                    "TEACHER MODE",
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1.6,
+                    ),
+                  ),
                 ),
               ),
             ],

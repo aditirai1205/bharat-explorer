@@ -3,14 +3,18 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
+import '../data/board_data.dart';
 import '../data/game_data.dart';
 import '../data/india_states_data.dart';
 import '../data/india_states_geometry.dart';
 import '../data/progress_store.dart';
 import '../data/regions.dart';
+import '../data/tour_stages.dart';
+import '../services/game_save_service.dart';
 import '../widgets/clouds_painter.dart';
 import '../widgets/particle_painter.dart';
 import '../widgets/states_map_painter.dart';
+import 'board_screen.dart';
 import 'journey_screen.dart';
 
 /// Interactive India map: the country is drawn from its real vector outline
@@ -94,6 +98,84 @@ class _MapScreenState extends State<MapScreen>
         transitionDuration: const Duration(milliseconds: 800),
         pageBuilder: (context, animation, secondaryAnimation) =>
             const JourneyScreen(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          final curved =
+              CurvedAnimation(parent: animation, curve: Curves.easeInOut);
+          return FadeTransition(
+            opacity: curved,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 0.08),
+                end: Offset.zero,
+              ).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Resumes the saved run: reloads the persisted game, then opens the board
+  /// exactly where the explorer left off (tile, score, stage and all).
+  Future<void> _continueJourney() async {
+    await GameSaveService.instance.loadGame();
+    if (!mounted) return;
+    setState(() {});
+    _pushBoard();
+  }
+
+  /// Starts a completely new game. Asks for confirmation first because ALL
+  /// previous progress (saves) is deleted, then begins on Stage 1, tile 1.
+  Future<void> _startNewJourney() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text("Are you sure?"),
+        content: const Text("Your previous progress will be deleted."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF2C5E7E),
+            ),
+            child: const Text(
+              "NO",
+              style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 1),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFFB3362E),
+            ),
+            child: const Text(
+              "YES",
+              style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    // Wipe every saved key and reset all in-memory state.
+    await GameSaveService.instance.clearGame();
+    if (!mounted) return;
+    setState(() {});
+
+    // Begin the adventure fresh: Journey 1, Stage 1, tile 1.
+    GameData.startJourney(0);
+    _pushBoard();
+  }
+
+  void _pushBoard() {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 800),
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const BoardScreen(),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           final curved =
               CurvedAnimation(parent: animation, curve: Curves.easeInOut);
@@ -394,56 +476,11 @@ class _MapScreenState extends State<MapScreen>
                     AnimatedOpacity(
                       opacity: _buttonVisible ? 1.0 : 0.0,
                       duration: const Duration(milliseconds: 500),
-                      child: SizedBox(
-                        width: double.infinity,
-                        height: 56,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(30),
-                            gradient: const LinearGradient(
-                              colors: [
-                                Color(0xFF0E9E7A),
-                                Color(0xFF14B67E),
-                                Color(0xFF3AC48D),
-                              ],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Color(0x5526B085),
-                                blurRadius: 20,
-                                offset: Offset(0, 8),
-                              ),
-                            ],
-                          ),
-                          child: Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(30),
-                              onTap: _beginJourney,
-                              child: const Center(
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text(
-                                      "START JOURNEY",
-                                      style: TextStyle(
-                                        fontSize: 19,
-                                        fontWeight: FontWeight.w900,
-                                        color: Colors.white,
-                                        letterSpacing: 3,
-                                      ),
-                                    ),
-                                    SizedBox(width: 8),
-                                    Icon(Icons.casino_rounded,
-                                        color: Colors.white, size: 24),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.zero,
+                        child: GameData.hasActiveRun
+                            ? _buildResumePanel()
+                            : _buildStartButton(),
                       ),
                     ),
                     const SizedBox(height: 14),
@@ -452,6 +489,219 @@ class _MapScreenState extends State<MapScreen>
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStartButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 56,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(30),
+          gradient: const LinearGradient(
+            colors: [
+              Color(0xFF0E9E7A),
+              Color(0xFF14B67E),
+              Color(0xFF3AC48D),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x5526B085),
+              blurRadius: 20,
+              offset: Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(30),
+            onTap: _beginJourney,
+            child: const Center(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    "START JOURNEY",
+                    style: TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                      letterSpacing: 3,
+                    ),
+                  ),
+                  SizedBox(width: 8),
+                  Icon(Icons.casino_rounded, color: Colors.white, size: 24),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Shown when a saved run is in progress: a "CONTINUE JOURNEY" card that
+  /// summarises where the explorer left off and offers Resume / New Game.
+  Widget _buildResumePanel() {
+    final stageIndex = stageIndexForTile(GameData.currentTile);
+    final stage = tourStages[stageIndex];
+    final displayName = GameData.playerName.trim().isEmpty
+        ? "Explorer"
+        : GameData.playerName;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xE60F2740), Color(0xE6102E4A)],
+        ),
+        border: Border.all(color: Colors.white24),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x220B3C66),
+            blurRadius: 24,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.play_circle_fill_rounded,
+                color: Color(0xFF3AC48D),
+                size: 18,
+              ),
+              SizedBox(width: 6),
+              Text(
+                "CONTINUE JOURNEY",
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                  letterSpacing: 2,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _resumeRow(Icons.person_rounded, "PLAYER NAME", displayName),
+          _resumeRow(Icons.explore_rounded, "CURRENT REGION", stage.name),
+          _resumeRow(
+            Icons.flag_rounded,
+            "CURRENT STAGE",
+            "Stage ${stageIndex + 1} of ${tourStages.length}",
+          ),
+          _resumeRow(Icons.stars_rounded, "CURRENT SCORE", '${GameData.score}'),
+          _resumeRow(
+            Icons.military_tech_rounded,
+            "EXPLORER RANK",
+            GameData.title.displayName,
+          ),
+          _resumeRow(
+            Icons.square_foot_rounded,
+            "CURRENT TILE",
+            '${GameData.currentTile} / $finishTile',
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _panelButton(
+                  "▶ Continue Journey",
+                  const [Color(0xFF0E9E7A), Color(0xFF3AC48D)],
+                  _continueJourney,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _panelButton(
+                  "🔄 Start New Journey",
+                  const [Color(0x55FFFFFF), Color(0x33FFFFFF)],
+                  _startNewJourney,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _resumeRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: const Color(0xFF7DD3FC)),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 9.5,
+              letterSpacing: 1.2,
+              fontWeight: FontWeight.w800,
+              color: Colors.white.withValues(alpha: 0.6),
+            ),
+          ),
+          const Spacer(),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _panelButton(
+    String label,
+    List<Color> colors,
+    VoidCallback onTap,
+  ) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Ink(
+          height: 46,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: LinearGradient(colors: colors),
+            border: Border.all(color: Colors.white24),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+                color: Colors.white,
+                letterSpacing: 0.6,
+              ),
+            ),
+          ),
         ),
       ),
     );
