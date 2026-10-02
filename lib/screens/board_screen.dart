@@ -15,6 +15,7 @@ import '../data/questions.dart';
 import '../data/titles.dart';
 import '../data/tour_stages.dart';
 import '../models/question.dart';
+import '../services/game_save_service.dart';
 import '../widgets/board_background.dart';
 import '../widgets/board_fx.dart';
 import '../widgets/board_overlay_painter.dart';
@@ -1830,10 +1831,161 @@ class _BoardScreenState extends State<BoardScreen>
               ),
             ),
           ),
+          const SizedBox(width: 6),
+          // ⚙ Settings — opens the in-game GAME MENU popup.
+          Material(
+            color: Colors.black.withValues(alpha: 0.25),
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: _openGameMenu,
+              child: const Padding(
+                padding: EdgeInsets.all(8),
+                child: Icon(Icons.settings_rounded,
+                    color: Color(0xFF4A3018), size: 20),
+              ),
+            ),
+          ),
           const SizedBox(width: 8),
           _scoreCard(),
         ],
       ),
+    );
+  }
+
+  /// Opens the in-game GAME MENU (small floating ⚙ gear at the top-right).
+  /// Guarded during a roll so the token is never mid-animation when the
+  /// player jumps back Home or restarts the journey.
+  Future<void> _openGameMenu() async {
+    if (_busy) return;
+    await _showGlassDialog<void>(
+      builder: (dialogContext) => _GameMenuDialog(
+        onResume: () => Navigator.of(dialogContext).pop(),
+        onSave: () {
+          Navigator.of(dialogContext).pop();
+          _menuSave();
+        },
+        onHowToPlay: () {
+          Navigator.of(dialogContext).pop();
+          _menuHowToPlay();
+        },
+        onHome: () {
+          Navigator.of(dialogContext).pop();
+          _menuHome();
+        },
+        onRestart: () {
+          Navigator.of(dialogContext).pop();
+          _menuRestart();
+        },
+        onClose: () => Navigator.of(dialogContext).pop(),
+      ),
+    );
+  }
+
+  /// Shared glassmorphism dialog: smooth fade + gentle scale-in, works on
+  /// web and Android alike.
+  Future<T?> _showGlassDialog<T>({
+    required WidgetBuilder builder,
+    bool barrierDismissible = true,
+  }) {
+    return showGeneralDialog<T>(
+      context: context,
+      barrierDismissible: barrierDismissible,
+      barrierLabel: "dialog",
+      barrierColor: const Color(0x6604232F),
+      transitionDuration: const Duration(milliseconds: 280),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) =>
+          Center(child: builder(dialogContext)),
+      transitionBuilder: (dialogContext, animation, secondaryAnimation, child) {
+        final curved =
+            CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.92, end: 1.0).animate(curved),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
+  /// 💾 Save Progress — writes right now and confirms with a SnackBar.
+  Future<void> _menuSave() async {
+    await GameSaveService.instance.flush();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text("Game Saved Successfully."),
+          backgroundColor: Color(0xFF3A2A0F),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+        ),
+      );
+  }
+
+  /// 📖 How to Play — a compact rule card with a Close button.
+  Future<void> _menuHowToPlay() async {
+    await _showGlassDialog<void>(
+      builder: (dialogContext) => const _HowToPlayDialog(),
+    );
+  }
+
+  /// Simple confirmation popup. Returns true only when the confirm button is
+  /// pressed.
+  Future<bool> _confirmQuestion(
+    String question, {
+    required String confirmLabel,
+    bool destructive = false,
+  }) async {
+    final result = await _showGlassDialog<bool>(
+      barrierDismissible: false,
+      builder: (dialogContext) => _ConfirmDialog(
+        question: question,
+        confirmLabel: confirmLabel,
+        destructive: destructive,
+      ),
+    );
+    return result ?? false;
+  }
+
+  /// 🏠 Home Screen — confirm, keep progress, return to the map.
+  Future<void> _menuHome() async {
+    final confirmed = await _confirmQuestion(
+      "Return to Home Screen?",
+      confirmLabel: "Yes",
+    );
+    if (!confirmed || !mounted) return;
+    await GameSaveService.instance.flush();
+    if (!mounted) return;
+    _goHome();
+  }
+
+  /// 🔄 Restart Journey — confirm, wipe ONLY the saved game progress, reset
+  /// the run, and return to the Home Screen.
+  Future<void> _menuRestart() async {
+    final confirmed = await _confirmQuestion(
+      "Restart your entire journey?",
+      confirmLabel: "Restart",
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+    await GameSaveService.instance.resetGameProgress();
+    if (!mounted) return;
+    _goHome();
+  }
+
+  void _goHome() {
+    Navigator.of(context).pushAndRemoveUntil(
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const MapScreen(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+            FadeTransition(opacity: animation, child: child),
+      ),
+      (route) => route.isFirst,
     );
   }
 
@@ -3644,4 +3796,389 @@ class _StampSerrationPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _StampSerrationPainter oldDelegate) =>
       oldDelegate.ink != ink;
+}
+
+/// Frosted-glass panel shared by every popup: a blurred backdrop, a
+/// semi-transparent saffron/brown gradient and a soft gold rim — the Bharat
+/// Explorer look on one rounded card.
+class _GlassPanel extends StatelessWidget {
+  final Widget child;
+
+  const _GlassPanel({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    const radius = 26.0;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xE64A2A0F), Color(0xE6281A08)],
+            ),
+            border: Border.all(
+              color: const Color(0xFFFFD54F).withValues(alpha: 0.30),
+              width: 1.4,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.40),
+                blurRadius: 32,
+                offset: const Offset(0, 12),
+              ),
+            ],
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+/// One large menu button: emoji chip + label, tinted with its action colour.
+class _MenuTile extends StatelessWidget {
+  final String emoji;
+  final String label;
+  final Color accent;
+  final VoidCallback onTap;
+
+  const _MenuTile({
+    required this.emoji,
+    required this.label,
+    required this.accent,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 9),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.12),
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.22),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: accent.withValues(alpha: 0.4)),
+                  ),
+                  child: Text(emoji, style: const TextStyle(fontSize: 19)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded,
+                    color: Color(0x59FFFFFF), size: 20),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The ⚙ GAME MENU popup: Resume / Save / How to Play / Home / Restart /
+/// Close.
+class _GameMenuDialog extends StatelessWidget {
+  final VoidCallback onResume;
+  final VoidCallback onSave;
+  final VoidCallback onHowToPlay;
+  final VoidCallback onHome;
+  final VoidCallback onRestart;
+  final VoidCallback onClose;
+
+  const _GameMenuDialog({
+    required this.onResume,
+    required this.onSave,
+    required this.onHowToPlay,
+    required this.onHome,
+    required this.onRestart,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassPanel(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 20, 18, 16),
+        child: SizedBox(
+          width: 292,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                "\u2699\uFE0F GAME MENU",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFFFFD54F),
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1,
+                ),
+              ),
+              const SizedBox(height: 14),
+              _MenuTile(
+                emoji: "\u25B6",
+                label: "Resume",
+                accent: const Color(0xFFFFD54F),
+                onTap: onResume,
+              ),
+              _MenuTile(
+                emoji: "\u{1F4BE}",
+                label: "Save Progress",
+                accent: const Color(0xFFFF9933),
+                onTap: onSave,
+              ),
+              _MenuTile(
+                emoji: "\u{1F4D6}",
+                label: "How to Play",
+                accent: const Color(0xFF138808),
+                onTap: onHowToPlay,
+              ),
+              _MenuTile(
+                emoji: "\u{1F3E0}",
+                label: "Home Screen",
+                accent: const Color(0xFFFF7043),
+                onTap: onHome,
+              ),
+              _MenuTile(
+                emoji: "\u{1F504}",
+                label: "Restart Journey",
+                accent: const Color(0xFFE64A45),
+                onTap: onRestart,
+              ),
+              _MenuTile(
+                emoji: "\u274C",
+                label: "Close",
+                accent: const Color(0xFFB08D57),
+                onTap: onClose,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 📖 HOW TO PLAY — the eight golden rules of the board.
+class _HowToPlayDialog extends StatelessWidget {
+  const _HowToPlayDialog();
+
+  static const List<(String, String)> _points = [
+    ("\u{1F3B2}", "Roll the dice to move."),
+    ("\u{1F7E9}", "Green tiles = Mini Games."),
+    ("\u{1F535}", "Blue tiles = Quiz Challenge."),
+    ("\u{1F7E1}", "Yellow tiles = Treasure / Badge."),
+    ("\u{1F534}", "Red tiles = Penalty."),
+    ("\u{1F40D}", "Snakes move you down."),
+    ("\u{1FA9F}", "Ladders move you up."),
+    ("\u{1F3C1}", "Reach Tile 36 to complete the stage."),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassPanel(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+        child: SizedBox(
+          width: 300,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                "\u{1F4D6} HOW TO PLAY",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFFFFD54F),
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const SizedBox(height: 14),
+              for (final (emoji, text) in _points)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 5),
+                  child: Row(
+                    children: [
+                      Text(emoji, style: const TextStyle(fontSize: 16)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          text,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.92),
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            height: 1.25,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 12),
+              _GlassButton(
+                label: "Close",
+                onTap: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact confirmation popup: the question plus Cancel / confirm buttons.
+class _ConfirmDialog extends StatelessWidget {
+  final String question;
+  final String confirmLabel;
+  final bool destructive;
+
+  const _ConfirmDialog({
+    required this.question,
+    required this.confirmLabel,
+    required this.destructive,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassPanel(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+        child: SizedBox(
+          width: 290,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                "\u2699\uFE0F",
+                style: TextStyle(fontSize: 26),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                question,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  height: 1.3,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: _GlassButton(
+                      label: "Cancel",
+                      neutral: true,
+                      onTap: () => Navigator.of(context).pop(false),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _GlassButton(
+                      label: confirmLabel,
+                      destructive: destructive,
+                      onTap: () => Navigator.of(context).pop(true),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Rounded gradient action button used inside the glassmpmorphism popups.
+class _GlassButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  final bool neutral;
+  final bool destructive;
+
+  const _GlassButton({
+    required this.label,
+    required this.onTap,
+    this.neutral = false,
+    this.destructive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final (begin, end) = neutral
+        ? (const Color(0xFF8A5A2B), const Color(0xFF4A3018))
+        : destructive
+            ? (const Color(0xFFE57369), const Color(0xFFB3362E))
+            : (const Color(0xFFFFB300), const Color(0xFF138808));
+    return Material(
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Container(
+          height: 46,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [begin, end],
+            ),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.18),
+            ),
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.6,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

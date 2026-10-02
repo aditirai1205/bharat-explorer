@@ -133,6 +133,31 @@ class GameSaveService {
     }
   }
 
+  /// Restarts the whole journey: wipes ONLY the saved game progress (score,
+  /// player position, passport, badges, visited states, current level, …)
+  /// from SharedPreferences and memory, while leaving the explorer's identity
+  /// profile and Teacher Mode content untouched. Used by the Board Screen's
+  /// "Restart Journey" option, which then returns the player to the Home
+  /// Screen.
+  Future<void> resetGameProgress() async {
+    // Drop any pending auto-save so a stale write can't recreate the key we
+    // are about to remove.
+    _autoSaveDebounce?.cancel();
+    _autoSaveDebounce = null;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_progressKey);
+
+    // Reset in-memory state without letting the auto-save hook re-write it.
+    final wasSuppressed = GameData.suppressAutoSave;
+    GameData.suppressAutoSave = true;
+    try {
+      GameData.resetAll();
+    } finally {
+      GameData.suppressAutoSave = wasSuppressed;
+    }
+  }
+
   /// Deletes every saved key and resets all in-memory state so the app is in
   /// the same state as a brand-new install.
   Future<void> clearGame() async {
