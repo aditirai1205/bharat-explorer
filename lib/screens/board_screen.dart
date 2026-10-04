@@ -12,6 +12,8 @@ import '../data/india_states_geometry.dart';
 import '../data/journeys_data.dart';
 import '../data/progress_store.dart';
 import '../data/questions.dart';
+import '../data/state_context.dart';
+import '../data/state_questions.dart';
 import '../data/titles.dart';
 import '../data/tour_stages.dart';
 import '../models/question.dart';
@@ -332,7 +334,10 @@ class _BoardScreenState extends State<BoardScreen>
     }
 
     final tile = tileAt(board.indexOf(_player));
-    final state = tile.state;
+    // State Context System: during a STATE run every tile counts as the
+    // ACTIVE state (passport stamp + monument/food discoveries all stay
+    // in-state); only the India Challenge keeps the tile's own Mixed label.
+    final state = StateContext.tileState(tile.state);
 
     // Feed the ACTIVE journey's own board progress (furthest tile + squares
     // seen) used by the Journey Progression page.
@@ -444,7 +449,7 @@ class _BoardScreenState extends State<BoardScreen>
         break;
       case TileKind.adventure:
         // White tile — a State Spotlight with facts + a knowledge check.
-        await _openSpotlight(state);
+        await _openSpotlight(StateContext.tileState(state));
         break;
     }
 
@@ -763,7 +768,7 @@ class _BoardScreenState extends State<BoardScreen>
       GameData.coins += c;
       _setMessage("\u{1FA99} Lucky Spin! +$c explorer coins");
     } else if (roll < 9) {
-      final fresh = indiaStates
+      final fresh = StateContext.scopeStates(indiaStates)
           .where((s) => !GameData.passportStates.contains(s.name))
           .toList()
         ..shuffle(_rng);
@@ -917,7 +922,7 @@ class _BoardScreenState extends State<BoardScreen>
       }
       var stamped = 0;
       if (result.stamps > 0) {
-        final pool = indiaStates
+        final pool = StateContext.scopeStates(indiaStates)
             .where((s) => !GameData.passportStates.contains(s.name))
             .toList()
           ..shuffle(_rng);
@@ -1032,9 +1037,23 @@ class _BoardScreenState extends State<BoardScreen>
     );
   }
 
-  /// Picks an unused general-knowledge question (falls back to any question
-  /// when the pool is exhausted) and marks it used so quizzes stay fresh.
+  /// Picks an unused question for the State Spotlight knowledge check. On a
+  /// STATE run the question comes from the ACTIVE state's own quiz bank; the
+  /// India Challenge (mixed mode) falls back to the general-knowledge pool.
   Question _spotlightQuestion(String stateName) {
+    if (StateContext.isStateRun) {
+      final bank = stateQuestionBanks[stateName] ?? const <Question>[];
+      if (bank.isNotEmpty) {
+        final fresh = bank
+            .where((q) => !GameData.usedQuestions.contains(q.question))
+            .toList();
+        final q = fresh.isNotEmpty
+            ? fresh[_rng.nextInt(fresh.length)]
+            : bank[_rng.nextInt(bank.length)];
+        GameData.usedQuestions.add(q.question);
+        return q;
+      }
+    }
     final pool = generalKnowledgePool
         .where((q) => !GameData.usedQuestions.contains(q.question))
         .toList();
@@ -1188,7 +1207,7 @@ class _BoardScreenState extends State<BoardScreen>
       _setMessage("\u{1F381} Mystery Surprise! ${badge.emoji} ${badge.name}");
       if (isNew) await _showBadgeCelebration([badge], 40);
     } else if (roll < 60) {
-      final fresh = indiaStates
+      final fresh = StateContext.scopeStates(indiaStates)
           .where((s) => !GameData.monuments.contains(s.monument))
           .toList();
       if (fresh.isNotEmpty) {
@@ -1201,8 +1220,8 @@ class _BoardScreenState extends State<BoardScreen>
         _setMessage("\u{1F381} Mystery Surprise! +15 points");
       }
     } else if (roll < 80) {
-      final fresh =
-          indiaStates.where((s) => !GameData.foods.contains(s.food)).toList();
+      final fresh = StateContext.scopeStates(indiaStates)
+          .where((s) => !GameData.foods.contains(s.food)).toList();
       if (fresh.isNotEmpty) {
         final s = fresh[_rng.nextInt(fresh.length)];
         GameData.foods.add(s.food);
@@ -1291,11 +1310,12 @@ class _BoardScreenState extends State<BoardScreen>
         emoji = "\u{1F405}";
         fact =
             "India shelters the Bengal tiger in reserves like Jim Corbett and Sundarbans.";
-        final freshM = indiaStates
+        final freshM = StateContext.scopeStates(indiaStates)
             .where((s) => !GameData.monuments.contains(s.monument))
             .toList();
-        final freshF =
-            indiaStates.where((s) => !GameData.foods.contains(s.food)).toList();
+        final freshF = StateContext.scopeStates(indiaStates)
+            .where((s) => !GameData.foods.contains(s.food))
+            .toList();
         if (freshM.isNotEmpty) {
           final s = freshM[_rng.nextInt(freshM.length)];
           GameData.monuments.add(s.monument);
@@ -1344,7 +1364,8 @@ class _BoardScreenState extends State<BoardScreen>
   }
 
   Future<void> _finishJourney() async {
-    final finishState = tileAt(board.indexOf(_player)).state;
+    final finishState =
+        StateContext.tileState(tileAt(board.indexOf(_player)).state);
     if (finishState != null && finishState.isNotEmpty) {
       GameData.runVisitedStates.add(finishState);
       GameData.markStateVisited(finishState);
@@ -1611,7 +1632,7 @@ class _BoardScreenState extends State<BoardScreen>
       if (GameData.badges.add(id)) GameData.addDailyProgress();
     }
     if (result.stamps > 0) {
-      final pool = indiaStates
+      final pool = StateContext.scopeStates(indiaStates)
           .where((s) => !GameData.passportStates.contains(s.name))
           .toList()
         ..shuffle(_rng);

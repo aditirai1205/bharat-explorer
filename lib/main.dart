@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'data/statistics_store.dart';
 import 'services/game_save_service.dart';
 import 'screens/splash_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // One load call populates the whole game (progress, player profile, teacher
-  // content) — all persistence lives in GameSaveService.
-  await GameSaveService.instance.loadGame();
+  // Load only the device-wide state (Teacher Mode content + quiz source) at
+  // startup. No player's progress is loaded yet — the login gate decides which
+  // profile to open and loads it (GameSaveService.login).
+  await GameSaveService.instance.loadDeviceData();
+  // The app is now in the foreground; start the play-time session clock.
+  StatisticsStore.instance.startSession();
   runApp(const BharatExplorerApp());
 }
 
@@ -36,11 +40,17 @@ class _BharatExplorerAppState extends State<BharatExplorerApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // When the app is backgrounded, loses focus or is being torn down, write
-    // any queued changes immediately instead of waiting for the debounce.
+    // When the app returns to the foreground, resume the play-time clock.
+    if (state == AppLifecycleState.resumed) {
+      StatisticsStore.instance.startSession();
+    }
+    // When the app is backgrounded, loses focus or is being torn down, stop
+    // the play-time clock and write any queued changes immediately instead of
+    // waiting for the debounce — the explorer never loses the latest progress.
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
+      StatisticsStore.instance.endSession();
       GameSaveService.instance.flush();
     }
   }

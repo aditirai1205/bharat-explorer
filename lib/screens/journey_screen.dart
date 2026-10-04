@@ -5,7 +5,9 @@ import '../data/game_data.dart';
 import '../data/india_states_data.dart';
 import '../data/journeys_data.dart';
 import '../data/state_questions.dart';
+import '../data/statistics_store.dart';
 import '../data/titles.dart';
+import '../services/game_save_service.dart';
 import 'board_screen.dart';
 import 'identity_screen.dart';
 
@@ -45,6 +47,7 @@ class _JourneyScreenState extends State<JourneyScreen>
 
   Future<void> _startJourney(int index) async {
     final journey = journeys[index];
+    final runEpochBefore = GameData.runStartEpochMs;
     final ok = GameData.startJourney(index);
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -59,6 +62,9 @@ class _JourneyScreenState extends State<JourneyScreen>
       );
       return;
     }
+    // A changed run-start stamp means a FRESH run began (not a resume) — that
+    // is a played game in 📊 My Statistics.
+    final isNewRun = GameData.runStartEpochMs != runEpochBefore;
     // The first journey asks for the explorer's identity (name + avatar)
     // which is printed on the Digital India Passport cover. Asked once.
     if (!GameData.hasIdentity) {
@@ -71,6 +77,10 @@ class _JourneyScreenState extends State<JourneyScreen>
         ),
       );
       if (created != true || !mounted) return;
+    }
+    if (isNewRun) {
+      StatisticsStore.instance.gameStarted();
+      GameSaveService.instance.saveGame();
     }
     if (!mounted) return;
     Navigator.of(context).push(

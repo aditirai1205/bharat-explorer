@@ -6,6 +6,7 @@ import '../data/collectibles_data.dart';
 import '../data/game_data.dart';
 import '../data/india_states_data.dart';
 import '../data/questions.dart';
+import '../data/state_context.dart';
 import '../widgets/particle_painter.dart';
 
 /// Result handed back to the board when a Green-tile mini-game ends.
@@ -424,7 +425,10 @@ class _StatePuzzleState extends State<_StatePuzzle> {
   @override
   void initState() {
     super.initState();
-    _state = stateNames[_rng.nextInt(stateNames.length)];
+    // State Context System: on a STATE run the puzzle hides the ACTIVE state;
+    // the India Challenge picks a random state from the mixed pool.
+    _state = StateContext.activeStateName ??
+        stateNames[_rng.nextInt(stateNames.length)];
     var letters = _state.replaceAll(' ', '').split('')..shuffle(_rng);
     while (letters.join() == _state.replaceAll(' ', '')) {
       letters = _state.replaceAll(' ', '').split('')..shuffle(_rng);
@@ -531,7 +535,22 @@ class _FindTheStateState extends State<_FindTheState> {
   @override
   void initState() {
     super.initState();
-    if (_rng.nextBool()) {
+    final activeName = StateContext.activeStateName;
+    if (activeName != null) {
+      // State Context System: the clue always describes the ACTIVE state.
+      final active = StateContext.activeState;
+      if (active != null && active.facts.isNotEmpty) {
+        _correctState = active.name;
+        _emoji = "\u{1F525}";
+        _prompt = active.facts[_rng.nextInt(active.facts.length)];
+      } else {
+        _correctState = activeName;
+        _emoji = "\u{1F3DB}";
+        _prompt =
+            "The landmark \u00AB${active?.monument ?? 'of this state'}\u00BB "
+            "stands in which state?";
+      }
+    } else if (_rng.nextBool()) {
       final pair =
           monumentStatePairs[_rng.nextInt(monumentStatePairs.length)];
       _correctState = pair.$2;
@@ -643,7 +662,12 @@ class _MatchFoodState extends State<_MatchFood> {
   @override
   void initState() {
     super.initState();
-    _pair = foodStatePairs[_rng.nextInt(foodStatePairs.length)];
+    // State Context System: during a STATE run the dish is the ACTIVE state's
+    // own cuisine; otherwise a random dish from the mixed pool.
+    final active = StateContext.activeState;
+    _pair = active != null
+        ? (active.food, active.name)
+        : foodStatePairs[_rng.nextInt(foodStatePairs.length)];
     final states = foodStatePairs.map((p) => p.$2).toSet().toList();
     _options = _fourOptions(_rng, _pair.$2, states);
     _answer = _options.indexOf(_pair.$2);
@@ -749,11 +773,25 @@ class _FestivalMatchState extends State<_FestivalMatch> {
   @override
   void initState() {
     super.initState();
-    _pair = festivalStatePairs[_rng.nextInt(festivalStatePairs.length)];
-    final card = festivalCards
-        .where((c) => c.name == _pair.$1 && c.state == _pair.$2)
-        .toList();
-    _cardId = card.isNotEmpty ? card.first.id : _pair.$1;
+    final active = StateContext.activeState;
+    if (active != null) {
+      // State Context System: the festival belongs to the ACTIVE state.
+      final inState =
+          festivalCards.where((c) => c.state == active.name).toList();
+      if (inState.isNotEmpty) {
+        _pair = (inState.first.name, active.name);
+        _cardId = inState.first.id;
+      } else {
+        _pair = festivalStatePairs[_rng.nextInt(festivalStatePairs.length)];
+        _cardId = _pair.$1;
+      }
+    } else {
+      _pair = festivalStatePairs[_rng.nextInt(festivalStatePairs.length)];
+      final card = festivalCards
+          .where((c) => c.name == _pair.$1 && c.state == _pair.$2)
+          .toList();
+      _cardId = card.isNotEmpty ? card.first.id : _pair.$1;
+    }
     final states = festivalStatePairs.map((p) => p.$2).toSet().toList();
     _options = _fourOptions(_rng, _pair.$2, states);
     _answer = _options.indexOf(_pair.$2);
@@ -859,7 +897,12 @@ class _SpotMonumentState extends State<_SpotMonument> {
   @override
   void initState() {
     super.initState();
-    _pair = monumentStatePairs[_rng.nextInt(monumentStatePairs.length)];
+    // State Context System: on a STATE run the wonder is the ACTIVE state's
+    // own landmark; otherwise a random monument from the mixed pool.
+    final active = StateContext.activeState;
+    _pair = active != null
+        ? (active.monument, active.name)
+        : monumentStatePairs[_rng.nextInt(monumentStatePairs.length)];
     final monuments = monumentStatePairs.map((p) => p.$1).toList();
     _options = _fourOptions(_rng, _pair.$1, monuments);
     _answer = _options.indexOf(_pair.$1);
@@ -965,7 +1008,18 @@ class _MemoryCapitalState extends State<_MemoryCapital> {
   void initState() {
     super.initState();
     final pairs = capitalStatePairs.toList()..shuffle(_rng);
-    final chosen = pairs.take(6).toList();
+    // State Context System: during a STATE run the ACTIVE state's capital is
+    // always on the board, joined by five other state pairs as partners.
+    final active = StateContext.activeState;
+    final List<(String, String)> chosen;
+    if (active != null) {
+      chosen = [
+        (active.name, active.capital),
+        ...pairs.where((p) => p.$2 != active.name).take(5),
+      ]..shuffle(_rng);
+    } else {
+      chosen = pairs.take(6).toList();
+    }
     final cards = <_MemoryCard>[];
     for (int p = 0; p < chosen.length; p++) {
       cards.add(_MemoryCard(pairId: p, label: "\u{1F5FA} ${chosen[p].$1}"));

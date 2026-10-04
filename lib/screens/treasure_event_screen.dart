@@ -6,6 +6,7 @@ import '../data/badges_data.dart';
 import '../data/collectibles_data.dart';
 import '../data/game_data.dart';
 import '../data/india_states_data.dart';
+import '../data/state_context.dart';
 import '../widgets/particle_painter.dart';
 
 /// Reward handed back to the board after a Yellow Treasure tile event closes.
@@ -377,7 +378,7 @@ class _BackpackEventState extends State<_BackpackEvent> {
   @override
   void initState() {
     super.initState();
-    final fresh = indiaStates
+    final fresh = StateContext.scopeStates(indiaStates)
         .where((s) => !GameData.foods.contains(s.food))
         .toList();
     if (fresh.isNotEmpty) {
@@ -779,8 +780,8 @@ class _HeritageDiscoveryEventState extends State<_HeritageDiscoveryEvent> {
   @override
   void initState() {
     super.initState();
-    final freshMonuments =
-        indiaStates.where((s) => !GameData.monuments.contains(s.monument));
+    final freshMonuments = StateContext.scopeStates(indiaStates)
+        .where((s) => !GameData.monuments.contains(s.monument));
     if (freshMonuments.isNotEmpty && _rng.nextDouble() < 0.65) {
       final s = freshMonuments.toList()[_rng.nextInt(freshMonuments.length)];
       _icon = Icons.landscape_rounded;

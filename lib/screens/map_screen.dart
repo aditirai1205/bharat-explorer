@@ -9,6 +9,7 @@ import '../data/india_states_data.dart';
 import '../data/india_states_geometry.dart';
 import '../data/progress_store.dart';
 import '../data/regions.dart';
+import '../data/statistics_store.dart';
 import '../data/tour_stages.dart';
 import '../services/game_save_service.dart';
 import '../widgets/clouds_painter.dart';
@@ -16,6 +17,8 @@ import '../widgets/particle_painter.dart';
 import '../widgets/states_map_painter.dart';
 import 'board_screen.dart';
 import 'journey_screen.dart';
+import 'school_challenge_screen.dart';
+import 'statistics_screen.dart';
 import 'student_rewards_screen.dart';
 
 /// Interactive India map: the country is drawn from its real vector outline
@@ -126,8 +129,10 @@ class _MapScreenState extends State<MapScreen>
     _pushBoard();
   }
 
-  /// Starts a completely new game. Asks for confirmation first because ALL
-  /// previous progress (saves) is deleted, then begins on Stage 1, tile 1.
+  /// Starts a completely new game. Asks for confirmation first because ALL of
+  /// THIS player's previous progress (saves) is deleted — the name/email
+  /// profile and the other players' saves are untouched — then begins on
+  /// Stage 1, tile 1.
   Future<void> _startNewJourney() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -161,13 +166,16 @@ class _MapScreenState extends State<MapScreen>
     );
     if (confirmed != true || !mounted) return;
 
-    // Wipe every saved key and reset all in-memory state.
-    await GameSaveService.instance.clearGame();
+    // Wipe ONLY the current player's saved keys and reset all in-memory state.
+    await GameSaveService.instance.resetActivePlayerProgress();
     if (!mounted) return;
     setState(() {});
 
     // Begin the adventure fresh: Journey 1, Stage 1, tile 1.
     GameData.startJourney(0);
+    // A brand-new adventure counts as a played game in 📊 My Statistics.
+    StatisticsStore.instance.gameStarted();
+    GameSaveService.instance.saveGame();
     _pushBoard();
   }
 
@@ -487,6 +495,10 @@ class _MapScreenState extends State<MapScreen>
                               _buildStartButton(),
                             const SizedBox(height: 10),
                             _buildRewardsButton(),
+                            const SizedBox(height: 10),
+                            _buildStatisticsButton(),
+                            const SizedBox(height: 10),
+                            _buildChallengeButton(),
                           ],
                         ),
                       ),
@@ -558,6 +570,146 @@ class _MapScreenState extends State<MapScreen>
               SizedBox(width: 8),
               Text(
                 "REWARDS",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Opens the 📊 My Statistics dashboard.
+  void _openStatistics() {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 600),
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const StatisticsScreen(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          final curved =
+              CurvedAnimation(parent: animation, curve: Curves.easeInOut);
+          return FadeTransition(
+            opacity: curved,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildStatisticsButton() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(30),
+        onTap: _openStatistics,
+        child: Ink(
+          height: 46,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(30),
+            gradient: const LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [Color(0xFF0B3C66), Color(0xFF1565C0), Color(0xFF1E63C9)],
+            ),
+            border: Border.all(color: Colors.white24),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x441563A9),
+                blurRadius: 18,
+                offset: Offset(0, 7),
+              ),
+            ],
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                "📊",
+                style: TextStyle(fontSize: 17),
+              ),
+              SizedBox(width: 8),
+              Text(
+                "MY STATISTICS",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Opens the 🎓 Join School Challenge entry screen.
+  void _openChallenge() {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 600),
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const SchoolChallengeScreen(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          final curved =
+              CurvedAnimation(parent: animation, curve: Curves.easeInOut);
+          return FadeTransition(
+            opacity: curved,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildChallengeButton() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(30),
+        onTap: _openChallenge,
+        child: Ink(
+          height: 46,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(30),
+            gradient: const LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [Color(0xFFB34700), Color(0xFF0B3C66)],
+            ),
+            border: Border.all(color: Colors.white24),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x44000000),
+                blurRadius: 18,
+                offset: Offset(0, 7),
+              ),
+            ],
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                "🎓",
+                style: TextStyle(fontSize: 17),
+              ),
+              SizedBox(width: 8),
+              Text(
+                "JOIN SCHOOL CHALLENGE",
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 14,

@@ -21,6 +21,10 @@ class GameData {
 
   static void _markChange() {
     if (suppressAutoSave) return;
+    // Every real gameplay action re-stamps when the explorer last played. The
+    // plain field (no setter) avoids re-entering the auto-save hook; it is
+    // persisted in the save and shown on the Welcome Back resume popup.
+    lastPlayedEpochMs = DateTime.now().millisecondsSinceEpoch;
     onChanged?.call();
   }
 
@@ -356,6 +360,11 @@ class GameData {
 
   static int runStartEpochMs = 0;
 
+  /// Epoch-millis of the most recent gameplay action (stamped by
+  /// [_markChange]). Persisted so the "Welcome Back" login popup can show when
+  /// the explorer last played — it does NOT re-trigger the auto-save hook.
+  static int lastPlayedEpochMs = 0;
+
   /// Starts a brand-new journey: wipes every run-local counter and stamps the
   /// starting time. Lifetime progress (collections, badges, journey unlocks,
   /// [totalScore], daily mission) is intentionally preserved.
@@ -452,6 +461,7 @@ class GameData {
       usedQuestions.clear();
       lastQuestionType = "None";
       runStartEpochMs = DateTime.now().millisecondsSinceEpoch;
+      lastPlayedEpochMs = 0;
       mysteryTiles = [];
       shieldReady = false;
       extraDiceReady = false;
@@ -714,6 +724,7 @@ class GameData {
       'shieldReady': shieldReady,
       'extraDiceReady': extraDiceReady,
       'runStartEpochMs': runStartEpochMs,
+      'lastPlayedEpochMs': lastPlayedEpochMs,
       'passportStates': passportStates.toList(),
       'monuments': monuments.toList(),
       'foods': foods.toList(),
@@ -810,6 +821,7 @@ class GameData {
       extraDiceReady = json['extraDiceReady'] as bool? ?? false;
       runStartEpochMs = json['runStartEpochMs'] as int? ??
           DateTime.now().millisecondsSinceEpoch;
+      lastPlayedEpochMs = json['lastPlayedEpochMs'] as int? ?? 0;
       passportStates.clear();
       passportStates.addAll(
           (json['passportStates'] as List?)?.map((e) => e as String) ??
