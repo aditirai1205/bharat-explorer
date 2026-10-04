@@ -61,7 +61,11 @@ class _QuizScreenState extends State<QuizScreen>
       _picked = i;
       final correct = i == _question.answer;
       if (correct) {
-        GameData.score += 10 + widget.bonus;
+        // Spec score: +20 for a correct answer, +10 "perfect quiz" bonus (a
+        // quiz tile carries exactly one question, so answering it right IS a
+        // perfect quiz). Total +30, exactly the number the banner shows.
+        GameData.score += 20;
+        GameData.score += 10;
         GameData.correctAnswers++;
       } else {
         GameData.wrongAnswers++;

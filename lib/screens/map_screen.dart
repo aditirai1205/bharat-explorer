@@ -16,6 +16,7 @@ import '../widgets/particle_painter.dart';
 import '../widgets/states_map_painter.dart';
 import 'board_screen.dart';
 import 'journey_screen.dart';
+import 'student_rewards_screen.dart';
 
 /// Interactive India map: the country is drawn from its real vector outline
 /// over a soft sky with drifting clouds, birds and particles. Every state is
@@ -478,9 +479,16 @@ class _MapScreenState extends State<MapScreen>
                       duration: const Duration(milliseconds: 500),
                       child: SingleChildScrollView(
                         padding: EdgeInsets.zero,
-                        child: GameData.hasActiveRun
-                            ? _buildResumePanel()
-                            : _buildStartButton(),
+                        child: Column(
+                          children: [
+                            if (GameData.hasActiveRun)
+                              _buildResumePanel()
+                            else
+                              _buildStartButton(),
+                            const SizedBox(height: 10),
+                            _buildRewardsButton(),
+                          ],
+                        ),
                       ),
                     ),
                     const SizedBox(height: 14),
@@ -489,6 +497,76 @@ class _MapScreenState extends State<MapScreen>
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Opens the Student Rewards Hub — the player's reward vouchers and coupons.
+  void _openRewards() {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 600),
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const StudentRewardsScreen(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          final curved =
+              CurvedAnimation(parent: animation, curve: Curves.easeInOut);
+          return FadeTransition(
+            opacity: curved,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildRewardsButton() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(30),
+        onTap: _openRewards,
+        child: Ink(
+          height: 46,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(30),
+            gradient: const LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [Color(0xFF1E63C9), Color(0xFF1565C0), Color(0xFF0B3C66)],
+            ),
+            border: Border.all(color: Colors.white24),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x441563A9),
+                blurRadius: 18,
+                offset: Offset(0, 7),
+              ),
+            ],
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                "🎁",
+                style: TextStyle(fontSize: 17),
+              ),
+              SizedBox(width: 8),
+              Text(
+                "REWARDS",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 2,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

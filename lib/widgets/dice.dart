@@ -7,7 +7,16 @@ class Dice extends StatefulWidget {
   final int number;
   final VoidCallback onRoll;
 
-  const Dice({super.key, required this.number, required this.onRoll});
+  /// When false the die ignores taps entirely (used while a turn's movement
+  /// and tile events are resolving) but keeps its exact same look.
+  final bool enabled;
+
+  const Dice({
+    super.key,
+    required this.number,
+    required this.onRoll,
+    this.enabled = true,
+  });
 
   @override
   State<Dice> createState() => _DiceState();
@@ -79,10 +88,15 @@ class _DiceState extends State<Dice> with SingleTickerProviderStateMixin {
             final pressedScale = _pressed ? 0.92 : 1.0;
 
             return GestureDetector(
-              onTapDown: (_) => setState(() => _pressed = true),
-              onTapUp: (_) => setState(() => _pressed = false),
+              onTapDown: (_) {
+                if (widget.enabled) setState(() => _pressed = true);
+              },
+              onTapUp: (_) {
+                if (widget.enabled) setState(() => _pressed = false);
+              },
               onTapCancel: () => setState(() => _pressed = false),
               onTap: () {
+                if (!widget.enabled) return;
                 setState(() => _pressed = true);
                 widget.onRoll();
                 Future.delayed(const Duration(milliseconds: 160), () {

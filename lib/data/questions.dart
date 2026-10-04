@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 
 import '../data/game_data.dart';
+import '../data/journeys_data.dart';
+import '../data/state_questions.dart';
 import '../data/teacher_questions.dart';
 import '../models/question.dart';
 
@@ -16,31 +18,72 @@ int difficultyForTile(int tile) {
 }
 
 /// Picks the question for a quiz tile:
+/// * during a STATE run, ONLY that state's 15-question bank is used (a
+///   Maharashtra run only ever asks Maharashtra questions),
+/// * during the 🇮🇳 INDIA CHALLENGE, questions are mixed from every state's
+///   bank (plus the Teacher Mode bank, if enabled),
 /// * difficulty tier matches the current tile,
-/// * bank follows the Teacher Mode "Quiz Source" setting — Default, Teacher
-///   or Mixed (randomly from both) — falling back to Default automatically
-///   when there are no teacher questions,
 /// * never repeats a question already asked during the current game,
 /// * prefers a different flavour from the last question so styles vary,
 /// * falls back gracefully only when the tier's pool is truly exhausted.
 Question pickQuizQuestion({int tile = 1, String? stateName}) {
   final rng = math.Random();
   final tier = difficultyForTile(tile);
+  final activeIndex = GameData.activeJourney;
+  final challengeMode = activeIndex == indiaChallengeIndex;
+  final liveState = !challengeMode && isStateJourney(activeIndex)
+      ? GameData.journey.name
+      : null;
 
-  // Build the active bank from the Teacher Mode Quiz Source setting.
-  final source = TeacherQuestionStore.quizSource;
-  var pool = switch (source) {
-    QuizSource.teacherOnly => List<Question>.of(TeacherQuestionStore.questions),
-    QuizSource.defaultOnly => List<Question>.of(allQuestions),
-    QuizSource.mixed => <Question>[...allQuestions, ...TeacherQuestionStore.questions],
-  };
-  // Requirement: with no teacher questions, always use the default bank.
-  if (pool.isEmpty) pool = List<Question>.of(allQuestions);
+  // Build the active bank from the mode + the Teacher Mode Quiz Source.
+  List<Question> pool;
+  if (liveState != null) {
+    pool = List<Question>.of(stateQuestionBanks[liveState] ?? const []);
+    if (pool.isEmpty) pool = List<Question>.of(allQuestions);
+  } else if (challengeMode) {
+    pool = <Question>[
+      ...allStateBankQuestions,
+      if (TeacherQuestionStore.quizSource != QuizSource.defaultOnly)
+        ...TeacherQuestionStore.questions,
+    ];
+    if (pool.isEmpty) pool = List<Question>.of(allQuestions);
+  } else {
+    final source = TeacherQuestionStore.quizSource;
+    pool = switch (source) {
+      QuizSource.teacherOnly =>
+        List<Question>.of(TeacherQuestionStore.questions),
+      QuizSource.defaultOnly => List<Question>.of(allQuestions),
+      QuizSource.mixed =>
+        <Question>[...allQuestions, ...TeacherQuestionStore.questions],
+    };
+    // Requirement: with no teacher questions, always use the default bank.
+    if (pool.isEmpty) pool = List<Question>.of(allQuestions);
+  }
 
-  bool stateFilter(Question q) =>
-      stateName != null && stateName.isNotEmpty && stateName != "India"
-          ? q.state == stateName
-          : true;
+  // In a state run the bank is already the single state's questions; in the
+  // Challenge everything is allowed; elsewhere keep the tile's state filter.
+  bool stateFilter(Question q) => liveState != null
+      ? q.state == liveState
+      : challengeMode ||
+          (stateName == null ||
+              stateName.isEmpty ||
+              stateName == "India" ||
+              q.state == stateName);
+
+  // Spec: never repeat a state question until ALL 15 have been asked. When
+  // the whole state bank sits in `usedQuestions`, reset that state's pool so
+  // the next quiz starts a brand-new 15-question cycle (never a repeat within
+  // a single cycle).
+  if (liveState != null) {
+    final bank = stateQuestionBanks[liveState] ?? const <Question>[];
+    if (bank.isNotEmpty) {
+      final bankTexts = bank.map((q) => q.question).toSet();
+      final usedInBank = bankTexts.where(GameData.usedQuestions.contains).toList();
+      if (usedInBank.length == bankTexts.length) {
+        GameData.usedQuestions.removeAll(usedInBank);
+      }
+    }
+  }
 
   var tierPool = pool.where((q) => q.difficulty == tier).toList();
   final byState = tierPool.where(stateFilter).toList();
@@ -52,9 +95,14 @@ Question pickQuizQuestion({int tile = 1, String? stateName}) {
       .where((q) => !GameData.usedQuestions.contains(q.question))
       .toList();
 
-  // Teacher-only mode: when the teacher's bank (for this tier) is exhausted,
-  // seamlessly top up with the default bank instead of repeating a question.
-  if (unused.isEmpty && source == QuizSource.teacherOnly) {
+  // Teacher-only mode (classic, non-state quizzes): when the teacher's bank
+  // for this tier is exhausted, top up with the default bank instead of
+  // repeating a question. Never applies to a state run — those stay locked to
+  // the state's own bank.
+  final teacherOnlyMode = liveState == null &&
+      !challengeMode &&
+      TeacherQuestionStore.quizSource == QuizSource.teacherOnly;
+  if (unused.isEmpty && teacherOnlyMode) {
     final defaultTier = allQuestions
         .where((q) => q.difficulty == tier && stateFilter(q))
         .toList();

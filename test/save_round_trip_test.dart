@@ -45,6 +45,7 @@ void main() {
       GameData.dailyMissionProgress = 3;
       GameData.dailyMissionGoal = 5;
       GameData.dailyMissionDate = '2026-09-28';
+      GameData.addXp(250);
 
       // Serialise, wipe, then restore — exactly what `loadGame` does.
       final json = GameData.toJson();
@@ -73,6 +74,7 @@ void main() {
       expect(GameData.challengesCompleted, 6, reason: 'completed challenges');
       expect(GameData.mysteryTiles, [9, 22], reason: 'exact board');
       expect(GameData.shieldReady, isTrue, reason: 'unspent shield');
+      expect(GameData.xp, 250, reason: 'lifetime XP');
     } finally {
       GameData.resetAll();
     }

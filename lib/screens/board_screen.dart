@@ -29,6 +29,12 @@ import 'passport_screen.dart';
 import 'quiz_screen.dart';
 import 'treasure_event_screen.dart';
 
+/// Over-roll feedback shown when a roll would carry the explorer past tile
+/// 36: exact wording required by the board rules (kept in one place so the
+/// UI string is stable and unit-testable).
+String boardOverrollMessage(int needed) =>
+    "You need exactly $needed to finish \u2014 no movement!";
+
 /// The Snake-and-Ladder adventure across 36 squares, drawn inside a heavy
 /// wooden frame on a hand-painted treasure map.
 ///
@@ -53,6 +59,11 @@ class _BoardScreenState extends State<BoardScreen>
   bool _busy = false;
   bool _skipNextTurn = false;
   String _message = "";
+
+  /// Green Reward / Red Penalty index from the previous landing, so the next
+  /// one never repeats the exact same outcome twice in a row.
+  int _lastGreenReward = -1;
+  int _lastPenalty = -1;
 
   /// Snakes and ladders for THIS board run — a fresh layout every journey.
   late JourneyBoard _runBoard;
@@ -247,22 +258,29 @@ class _BoardScreenState extends State<BoardScreen>
     final rawTarget = from + roll;
 
     // Exact-roll finish rule: rolling beyond tile 36 keeps the explorer
-    // standing exactly where they are (no clamped, no extra movement).
+    // standing exactly where they are (no clamp, no extra movement) and
+    // shows how many steps are still missing.
     if (rawTarget > finishTile) {
-      _setMessage(
-          "You need exactly ${finishTile - from} to reach tile 36 \u2014 no movement!");
+      _setMessage(boardOverrollMessage(finishTile - from));
       await Future<void>.delayed(const Duration(milliseconds: 950));
       if (!mounted) return;
       setState(() => _busy = false);
       return;
     }
 
+    // A turn that lands EXACTLY on tile 36 ends the game: the finish flow
+    // completes/restarts the run (or sends the explorer home), so nothing
+    // else in this turn may fire afterwards — no surprise event, no extra
+    // dice, no double re-enable.
+    final finishedTurn = rawTarget == finishTile;
+
     _setMessage("Rolled $roll \u2014 moving!");
     await Future<void>.delayed(const Duration(milliseconds: 120));
     if (!mounted) return;
 
     // Sliding move: advance ONE tile at a time through the serpentine
-    // (~350 ms per square) so the token visibly glides the whole path —
+    // (300 ms per square — the token glide below shares this duration, so it
+    // lands exactly on each tile as it is highlighted while passing) —
     // always exactly `roll` squares, never any random extra movement.
     // Snakes/ladders are only checked on the RESTING tile, never for squares
     // the explorer passes over along the way.
@@ -271,7 +289,7 @@ class _BoardScreenState extends State<BoardScreen>
         _player = t + 1;
         _startBounce();
       });
-      await Future<void>.delayed(const Duration(milliseconds: 350));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
     }
 
@@ -281,6 +299,9 @@ class _BoardScreenState extends State<BoardScreen>
     await _resolveLanding();
     if (!mounted) return;
 
+    // The finish flow already manages `_busy`, the run state and the dice.
+    if (finishedTurn) return;
+
     // Rare surprise events: about 5% of rolls trigger one extra moment —
     // a festival, a train ride, a monsoon delay, a temple blessing or a
     // wildlife safari — after the tile's own outcome has resolved.
@@ -288,7 +309,7 @@ class _BoardScreenState extends State<BoardScreen>
       await _openSurpriseEvent();
       if (!mounted) return;
     }
-    setState(() => _busy = false);
+    if (mounted) setState(() => _busy = false);
 
     // Green Lucky Box reward: one automatic FREE roll granted earlier.
     if (_extraDice && _player < finishTile) {
@@ -352,11 +373,12 @@ class _BoardScreenState extends State<BoardScreen>
 
     switch (tile.kind) {
       case TileKind.bonus:
-        // Green tile — a short educational mini-game picked at random from
-        // six fast challenge games.
+        // Green tile — ONE random reward from six (bonus points, an extra
+        // dice roll, XP, a mini puzzle, a memory game or a lucky spin),
+        // never the same reward twice in a row.
         GameData.challengesCompleted++;
         GameData.addDailyProgress();
-        await _openMiniGame(countsAsChallenge: true);
+        await _openGreenTile();
         break;
       case TileKind.quiz:
         GameData.quizzesCompleted++;
@@ -364,12 +386,19 @@ class _BoardScreenState extends State<BoardScreen>
         _setMessage("Quiz tile unlocked!");
         await Future<void>.delayed(const Duration(milliseconds: 250));
         if (!mounted) return;
+        // Spec: a STATE run only ever quizzes the SELECTED state — pass the
+        // journey's own state so `pickQuizQuestion` stays locked to its bank
+        // and the visited-state bookkeeping matches the quiz content. The
+        // India Challenge keeps the tile's own state (mixed bank).
+        final quizState = isStateJourney(GameData.activeJourney)
+            ? GameData.journey.name
+            : (tile.state ?? "India");
         final correctBefore = GameData.correctAnswers;
         final wrongBefore = GameData.wrongAnswers;
         await Navigator.of(context).push(
           PageRouteBuilder(
             pageBuilder: (context, animation, secondaryAnimation) =>
-                QuizScreen(stateName: tile.state ?? "India", bonus: 20, tile: _player),
+                QuizScreen(stateName: quizState, bonus: 20, tile: _player),
             transitionsBuilder:
                 (context, animation, secondaryAnimation, child) =>
                     FadeTransition(
@@ -454,10 +483,13 @@ class _BoardScreenState extends State<BoardScreen>
         GameData.doubleSnakes++;
         tail = math.max(1, chute.head - chute.distance * 2);
         _setMessage(
-            "\u{1F40D}\u{1F62D} The snake strikes TWICE! Tile $head \u2192 Tile $tail");
+            "\u{1F40D}\u{1F62D} The snake strikes TWICE! Tile $head \u2192 Tile $tail (-15 points)");
       } else {
-        _setMessage("\u{1F40D} Oh no! A Snake bit you! Tile $head \u2192 Tile $tail");
+        _setMessage(
+            "\u{1F40D} Oh no! A Snake bit you! Tile $head \u2192 Tile $tail (-15 points)");
       }
+      // Spec score: an actual snake hit costs 15 points (shield/skip-exempt).
+      GameData.score = math.max(0, _score - 15);
       await Future<void>.delayed(const Duration(milliseconds: 500));
       if (!mounted) return;
       await _animateSlide(
@@ -562,14 +594,19 @@ class _BoardScreenState extends State<BoardScreen>
   /// the win also pushes the matching Western mission forward. Rewards (points
   /// plus any badges, cards, medals, foods or monuments discovered) are applied
   /// from the [MiniGameResult] the screen pops back with.
-  Future<void> _openMiniGame({bool countsAsChallenge = false}) async {
-    _setMessage("Bonus tile! A mini-game awaits \u{1F3AE}");
+  Future<void> _openMiniGame({
+    bool countsAsChallenge = false,
+    int? forcedMode,
+  }) async {
+    _setMessage(forcedMode == 5
+        ? "Bonus tile! Memory Game! \u{1F9E0}"
+        : "Bonus tile! A mini-game awaits \u{1F3AE}");
     await Future<void>.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
     final result = await Navigator.of(context).push<MiniGameResult>(
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) =>
-            const MiniGameScreen(),
+            MiniGameScreen(mode: forcedMode),
         transitionsBuilder: (context, animation, secondaryAnimation, child) =>
             FadeTransition(opacity: animation, child: child),
       ),
@@ -599,8 +636,7 @@ class _BoardScreenState extends State<BoardScreen>
 
     final newBadges = <HeritageBadge>[];
     for (final id in result.badges) {
-      if (GameData.badges.add(id)) {
-        GameData.addDailyProgress();
+      if (await _awardBadge(id)) {
         final b = badgeById(id);
         if (b != null) newBadges.add(b);
       }
@@ -637,65 +673,196 @@ class _BoardScreenState extends State<BoardScreen>
       }
     }
 
-    if (result.points > 0) {
-      GameData.score += result.points;
+    // Spec score: a mini-game WIN is worth a flat +30 (the mini-game's own
+    // small points feed its on-screen banner; the +30 is what hits the score).
+    final winAward = result.points > 0 ? 30 : 0;
+    if (winAward > 0) {
+      GameData.score += winAward;
       _confetti.forward(from: 0);
       _setMessage(message.isNotEmpty
-          ? "Mini-game cleared! +${result.points} points \u2022 $message"
-          : "Mini-game cleared! +${result.points} points");
+          ? "Mini-game cleared! +$winAward points \u2022 $message"
+          : "Mini-game cleared! +$winAward points");
     } else {
       _setMessage("Mini-game over! $message");
     }
     if (newBadges.isNotEmpty) {
-      await _showBadgeCelebration(newBadges, result.points);
+      await _showBadgeCelebration(newBadges, winAward + newBadges.length * 40);
     }
     await _claimMission();
     ProgressStore.save();
   }
 
-  /// Red tile: the Penalty Box — one random misfortune strikes: walk back,
-  /// lose points, miss the next turn, or lose a badge.
+  /// Green tile: ONE random reward from six — bonus points, a free extra dice
+  /// roll, XP, a mini puzzle, a memory game or a lucky spin. The same reward
+  /// never fires twice in a row. Exactly one reward happens per landing, then
+  /// the dice re-enable.
+  Future<void> _openGreenTile() async {
+    const rewards = [
+      'Bonus Points',
+      'Extra Dice Roll',
+      'Collect XP',
+      'Mini Puzzle',
+      'Memory Game',
+      'Lucky Spin',
+    ];
+    // Never repeat the previous reward immediately (index walk to any OTHER).
+    var choice = _rng.nextInt(rewards.length);
+    if (choice == _lastGreenReward) {
+      choice = (choice + 1 + _rng.nextInt(rewards.length - 1)) % rewards.length;
+    }
+    _lastGreenReward = choice;
+
+    _setMessage("Bonus tile! ${rewards[choice]} \u{1F3AE}");
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+
+    switch (choice) {
+      case 0:
+        final pts = 15 + _rng.nextInt(16); // 15..30
+        GameData.score += pts;
+        _confetti.forward(from: 0);
+        _setMessage("\u{1F389} Bonus points! +$pts points");
+        break;
+      case 1:
+        _extraDice = true;
+        GameData.extraDiceReady = true;
+        _setMessage("\u{1F3B2} Lucky! You get an EXTRA ROLL after this turn!");
+        break;
+      case 2:
+        final xp = 10 + _rng.nextInt(16); // 10..25
+        GameData.addXp(xp);
+        _confetti.forward(from: 0);
+        _setMessage("\u{2728} Collect XP! +$xp XP");
+        break;
+      case 3:
+        await _openMiniGame(countsAsChallenge: true);
+        break;
+      case 4:
+        await _openMiniGame(countsAsChallenge: true, forcedMode: 5);
+        break;
+      default:
+        await _luckySpin();
+        break;
+    }
+    await _claimMission();
+    ProgressStore.save();
+  }
+
+  /// "Lucky Spin" green reward — an instant spin on a small prize table that
+  /// reuses only existing celebrations (points / coins / a passport stamp /
+  /// a fresh Heritage Badge), no new UI.
+  Future<void> _luckySpin() async {
+    final roll = _rng.nextInt(10);
+    if (roll < 4) {
+      final pts = 10 + _rng.nextInt(16);
+      GameData.score += pts;
+      _confetti.forward(from: 0);
+      _setMessage("\u{1F300} Lucky Spin! +$pts points");
+    } else if (roll < 7) {
+      final c = 5 + _rng.nextInt(11); // 5..15
+      GameData.coins += c;
+      _setMessage("\u{1FA99} Lucky Spin! +$c explorer coins");
+    } else if (roll < 9) {
+      final fresh = indiaStates
+          .where((s) => !GameData.passportStates.contains(s.name))
+          .toList()
+        ..shuffle(_rng);
+      if (fresh.isNotEmpty && GameData.stampPassport(fresh.first.name) > 0) {
+        _setMessage("\u{1F6C2} Lucky Spin! Stamped ${fresh.first.name}!");
+      } else {
+        GameData.score += 20;
+        _setMessage("\u{1F300} Lucky Spin! +20 points");
+      }
+    } else {
+      final badge = randomNewBadge(_rng);
+      if (await _awardBadge(badge.id)) {
+        _confetti.forward(from: 0);
+        await _showBadgeCelebration([badge], 40);
+      } else {
+        GameData.score += 15;
+        _setMessage("\u{1F300} Lucky Spin! +15 points");
+      }
+    }
+  }
+
+  /// Collects a NEW heritage badge: stamps it into the collection AND grants
+  /// the spec's +40 badge points. Returns false when the badge was owned.
+  Future<bool> _awardBadge(String id) async {
+    if (!GameData.badges.add(id)) return false;
+    GameData.addDailyProgress();
+    GameData.score += 40;
+    return true;
+  }
+
+  /// Red tile: the Penalty Box — one random misfortune strikes: walk back 2,
+  /// walk back 3, lose 20 points, skip the next turn, or lose explorer coins.
+  /// The same penalty never fires twice in a row.
   Future<void> _openPenaltyBox() async {
     _setMessage("\u{1F6A8} Penalty Box! A stroke of bad luck!");
     await Future<void>.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
 
-    final roll = _rng.nextInt(4);
-    if (roll == 0) {
-      final back = 2 + _rng.nextInt(3); // 2..4
-      _setMessage("\u{1F6A8} Penalty! Stumble back $back tiles.");
-      await Future<void>.delayed(const Duration(milliseconds: 350));
-      if (!mounted) return;
-      await _walkBack(back);
-    } else if (roll == 1) {
-      final loss = 10 + _rng.nextInt(16); // 10..25
-      GameData.score = math.max(0, _score - loss);
-      _setMessage("\u{1F6A8} Penalty! -$loss points.");
-    } else if (roll == 2) {
-      _skipNextTurn = true;
-      _setMessage("\u{1F6A8} Penalty! Your NEXT TURN is skipped.");
-    } else if (GameData.badges.isNotEmpty) {
-      final lost =
-          GameData.badges.elementAt(_rng.nextInt(GameData.badges.length));
-      GameData.badges.remove(lost);
-      final b = badgeById(lost);
-      _setMessage(
-          "\u{1F6A8} Penalty! You lost ${b?.emoji ?? "\u{1F396}"} ${b?.name ?? "a badge"}!");
-    } else {
-      GameData.score = math.max(0, _score - 15);
-      _setMessage("\u{1F6A8} Penalty! -15 points.");
+    const penalties = [
+      'Back 2',
+      'Back 3',
+      'Lost Points',
+      'Skip Turn',
+      'Lose Coin',
+    ];
+    // Never repeat the previous penalty immediately.
+    var choice = _rng.nextInt(penalties.length);
+    if (choice == _lastPenalty) {
+      choice = (choice + 1 + _rng.nextInt(penalties.length - 1)) % penalties.length;
+    }
+    _lastPenalty = choice;
+
+    switch (choice) {
+      case 0:
+        _setMessage("\u{1F6A8} Penalty! Stumble back 2 tiles.");
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        if (!mounted) return;
+        await _walkBack(2);
+        break;
+      case 1:
+        _setMessage("\u{1F6A8} Penalty! Stumble back 3 tiles.");
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        if (!mounted) return;
+        await _walkBack(3);
+        break;
+      case 2:
+        GameData.score = math.max(0, _score - 20);
+        _setMessage("\u{1F6A8} Penalty! -20 points.");
+        break;
+      case 3:
+        _skipNextTurn = true;
+        _setMessage("\u{1F6A8} Penalty! Your NEXT TURN is skipped.");
+        break;
+      default:
+        final coinLoss = math.min(GameData.coins, 10);
+        if (coinLoss > 0) {
+          GameData.coins -= coinLoss;
+          _setMessage("\u{1F6A8} Penalty! You lost $coinLoss explorer coins.");
+        } else {
+          GameData.score = math.max(0, _score - 15);
+          _setMessage(
+              "\u{1F6A8} Penalty! No coins to lose \u2014 -15 points instead.");
+        }
+        break;
     }
     await _claimMission();
     ProgressStore.save();
   }
 
-  /// Yellow tile: one random reward event from the Treasure Event spread —
+    /// Yellow tile: one random reward event from the Treasure Event spread —
   /// the classic Treasure Chest, the Traveller's Backpack, Spin the Wheel, a
   /// Mystery Box or a Heritage Discovery. Every event records the opened chest
   /// and pushes the Southern regional mission, exactly like the plain box did.
   Future<void> _openTreasureBox() async {
     GameData.treasuresOpened++;
-    _setMessage("\u{1F48E} Treasure tile! A reward event awaits!");
+    // Spec score: every treasure tile landing is worth +50 points, on top of
+    // whatever the reward event itself grants.
+    GameData.score += 50;
+    _setMessage("\u{1F48E} Treasure tile! +50 points \u2022 a reward event awaits!");
     // Golden pulse while the treasure tile is active.
     _treasureGlow.repeat(reverse: true);
     await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -730,8 +897,7 @@ class _BoardScreenState extends State<BoardScreen>
       GameData.coins += result.coins;
       final newBadges = <HeritageBadge>[];
       for (final id in result.badges) {
-        if (GameData.badges.add(id)) {
-          GameData.addDailyProgress();
+        if (await _awardBadge(id)) {
           final b = badgeById(id);
           if (b != null) newBadges.add(b);
         }
@@ -767,7 +933,8 @@ class _BoardScreenState extends State<BoardScreen>
         _confetti.forward(from: 0);
       }
       if (newBadges.isNotEmpty) {
-        await _showBadgeCelebration(newBadges, result.points);
+        await _showBadgeCelebration(
+            newBadges, result.points + newBadges.length * 40);
       } else if (allChests || stageRef != null || result.food != null ||
           result.monument != null || stamped > 0) {
         final firstNewBadge = newBadges.isNotEmpty ? newBadges.first : null;
@@ -1017,10 +1184,9 @@ class _BoardScreenState extends State<BoardScreen>
       _setMessage("\u{1F381} Mystery Surprise! +$pts points");
     } else if (roll < 40) {
       final badge = randomNewBadge(_rng);
-      final isNew = GameData.badges.add(badge.id);
-      if (isNew) GameData.addDailyProgress();
+      final isNew = await _awardBadge(badge.id);
       _setMessage("\u{1F381} Mystery Surprise! ${badge.emoji} ${badge.name}");
-      if (isNew) await _showBadgeCelebration([badge], 0);
+      if (isNew) await _showBadgeCelebration([badge], 40);
     } else if (roll < 60) {
       final fresh = indiaStates
           .where((s) => !GameData.monuments.contains(s.monument))
@@ -1090,7 +1256,7 @@ class _BoardScreenState extends State<BoardScreen>
             "The peacock \u2014 India's national bird \u2014 dances in the rain before the monsoon.";
         GameData.score += 15;
         message = "\u{1F99A} Peacock Festival! +15 points";
-        if (GameData.badges.add("peacock")) badge = badgeById("peacock");
+        if (await _awardBadge("peacock")) badge = badgeById("peacock");
         break;
       case 1:
         title = "INDIAN RAILWAY EXPRESS";
@@ -1150,8 +1316,7 @@ class _BoardScreenState extends State<BoardScreen>
     if (!mounted) return;
     _setMessage(message);
     if (badge != null) {
-      GameData.addDailyProgress();
-      await _showBadgeCelebration([badge], 15);
+      await _showBadgeCelebration([badge], 55);
     }
     GameData.addDailyProgress();
     await _claimMission();
@@ -1204,6 +1369,7 @@ class _BoardScreenState extends State<BoardScreen>
       final checkpoint = await _showSummitCheckpoint(missing);
       if (!mounted) return;
       if (checkpoint == 'home') {
+        _busy = false;
         Navigator.of(context).pushAndRemoveUntil(
           PageRouteBuilder(
             pageBuilder: (context, animation, secondaryAnimation) =>
@@ -1245,6 +1411,7 @@ class _BoardScreenState extends State<BoardScreen>
     if (!mounted) return;
 
     if (action == 'home') {
+      _busy = false;
       Navigator.of(context).pushAndRemoveUntil(
         PageRouteBuilder(
           pageBuilder: (context, animation, secondaryAnimation) =>
@@ -2074,12 +2241,8 @@ class _BoardScreenState extends State<BoardScreen>
                   return FadeTransition(
                     opacity: animation,
                     child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.65, end: 1.0).animate(
-                        CurvedAnimation(
-                          parent: animation,
-                          curve: Curves.easeOutBack,
-                        ),
-                      ),
+                      scale: Tween<double>(begin: 0.65, end: 1.0)
+                          .animate(animation),
                       child: child,
                     ),
                   );
@@ -2277,7 +2440,7 @@ class _BoardScreenState extends State<BoardScreen>
 
     final c = _centerFor(_player, cell);
     return AnimatedPositioned(
-      duration: const Duration(milliseconds: 380),
+      duration: const Duration(milliseconds: 300),
       curve: Curves.easeInOutCubic,
       left: c.dx - tokenSize / 2,
       top: c.dy - tokenSize / 2,
@@ -2402,7 +2565,7 @@ class _BoardScreenState extends State<BoardScreen>
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Dice(number: _die, onRoll: _roll),
+                Dice(number: _die, onRoll: _roll, enabled: !_busy),
                 const SizedBox(width: 18),
                 Column(
                   mainAxisSize: MainAxisSize.min,

@@ -2,19 +2,21 @@ import 'package:flutter/material.dart';
 
 import '../data/board_data.dart';
 import '../data/game_data.dart';
+import '../data/india_states_data.dart';
 import '../data/journeys_data.dart';
+import '../data/state_questions.dart';
 import '../data/titles.dart';
 import 'board_screen.dart';
 import 'identity_screen.dart';
 
-/// Journey Progression — the page shown BEFORE the board game.
+/// State Selection — the page shown BEFORE the board game.
 ///
-/// Six journey stages (Northern/Western/Southern/Eastern/North-East India and
-/// the final Incredible India) are unlocked one at a time. Each journey keeps
-/// its OWN board progress and completion percentage, and the player taps an
-/// unlocked stage to begin (or continue) it. Locked stages show why they are
-/// still locked. No existing screen is modified — this page sits between the
-/// Interactive Map ("Start Journey") and the board.
+/// Every one of the 28 Indian states is its own playable stage with its own
+/// board progress, quiz question count, difficulty rating and best score.
+/// All states are open from the start (no sequential locks); the final
+/// 🇮🇳 India Challenge is a premium gold card unlocked only after every state
+/// has been completed. No existing screen is modified — this page sits
+/// between the Interactive Map ("Start Journey") and the board.
 class JourneyScreen extends StatefulWidget {
   const JourneyScreen({super.key});
 
@@ -22,7 +24,25 @@ class JourneyScreen extends StatefulWidget {
   State<JourneyScreen> createState() => _JourneyScreenState();
 }
 
-class _JourneyScreenState extends State<JourneyScreen> {
+class _JourneyScreenState extends State<JourneyScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _entrance;
+
+  @override
+  void initState() {
+    super.initState();
+    _entrance = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..forward();
+  }
+
+  @override
+  void dispose() {
+    _entrance.dispose();
+    super.dispose();
+  }
+
   Future<void> _startJourney(int index) async {
     final journey = journeys[index];
     final ok = GameData.startJourney(index);
@@ -32,7 +52,7 @@ class _JourneyScreenState extends State<JourneyScreen> {
           backgroundColor: const Color(0xFF33415E),
           content: Text(
             "🔒 ${journey.emoji} ${journey.name} is locked — "
-            "complete the previous journey first!",
+            "complete all 28 states first!",
             style: const TextStyle(fontWeight: FontWeight.w700),
           ),
         ),
@@ -76,6 +96,17 @@ class _JourneyScreenState extends State<JourneyScreen> {
     );
   }
 
+  /// Entrance curve for card [index]: a quick fade-and-rise that staggers
+  /// down the list so cards gently cascade into view.
+  Animation<double> _cardEntrance(int index) {
+    final start = (index * 0.045).clamp(0.0, 0.72);
+    final end = (start + 0.5).clamp(0.0, 1.0);
+    return CurvedAnimation(
+      parent: _entrance,
+      curve: Interval(start, end, curve: Curves.easeOutCubic),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final rank = GameData.title;
@@ -91,19 +122,24 @@ class _JourneyScreenState extends State<JourneyScreen> {
                 _header(context),
                 Expanded(
                   child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(
+                      parent: AlwaysScrollableScrollPhysics(),
+                    ),
                     padding: const EdgeInsets.fromLTRB(16, 6, 16, 28),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _overviewCard(rank),
                         const SizedBox(height: 12),
-                        _tourLabel(),
+                        _selectionHeader(),
                         const SizedBox(height: 8),
-                        for (int i = 0; i < journeys.length; i++) ...[
-                          _journeyCard(i, journeys[i]),
-                          if (i != journeys.length - 1)
+                        for (int i = 0; i < indiaChallengeIndex; i++) ...[
+                          _stateCard(i, journeys[i], playableStates[i]),
+                          if (i != indiaChallengeIndex - 1)
                             const SizedBox(height: 10),
                         ],
+                        const SizedBox(height: 14),
+                        _challengeCard(),
                         const SizedBox(height: 14),
                         _dailyMissionCard(),
                       ],
@@ -139,7 +175,7 @@ class _JourneyScreenState extends State<JourneyScreen> {
           const SizedBox(width: 12),
           const Expanded(
             child: Text(
-              "JOURNEY PROGRESSION 🗺️",
+              "CHOOSE YOUR STATE 🇮🇳",
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 17,
@@ -188,7 +224,7 @@ class _JourneyScreenState extends State<JourneyScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  "Explorer Rank · 6 journeys · one Bharat",
+                  "Explorer Rank · 28 states · one Bharat",
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.6),
                     fontSize: 11.5,
@@ -227,13 +263,15 @@ class _JourneyScreenState extends State<JourneyScreen> {
     );
   }
 
-  Widget _tourLabel() {
-    final done = GameData.completedJourneys.length;
+  Widget _selectionHeader() {
+    final statesDone = GameData.completedJourneys
+        .where(isStateJourney)
+        .length;
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(
-          "Choose your journey",
+          "Pick a state to explore",
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.85),
             fontSize: 13,
@@ -251,7 +289,7 @@ class _JourneyScreenState extends State<JourneyScreen> {
             ),
           ),
           child: Text(
-            "$done of $totalJourneys conquered",
+            "$statesDone of $indiaChallengeIndex conquered",
             style: const TextStyle(
               color: Color(0xFF7BE0C5),
               fontSize: 11,
@@ -263,209 +301,460 @@ class _JourneyScreenState extends State<JourneyScreen> {
     );
   }
 
-  Widget _journeyCard(int index, Journey j) {
-    final unlocked = GameData.unlockedJourneys.contains(index);
+  Widget _starRow(int filled, {Color? color}) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(3, (i) {
+        final on = i < filled;
+        return Icon(
+          on ? Icons.star_rounded : Icons.star_outline_rounded,
+          size: 15,
+          color: on
+              ? (color ?? const Color(0xFFFFD54F))
+              : Colors.white.withValues(alpha: 0.18),
+        );
+      }),
+    );
+  }
+
+  Widget _statPill(String emoji, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 12)),
+          const SizedBox(width: 4),
+          Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stateCard(int index, Journey j, IndiaState state) {
     final completed = GameData.completedJourneys.contains(index);
     final isActive =
-        unlocked && !completed && index == GameData.activeJourney;
+        !completed && index == GameData.activeJourney && GameData.hasActiveRun;
     final percent = GameData.journeyPercent(index);
-    final seenCount = GameData.journeySeenTiles[index]?.length ?? 0;
-    final bestTile = GameData.journeyBestTile[index] ?? 0;
-
-    final String prefix =
-        index == journeys.length - 1 ? "Final Journey" : "Journey ${index + 1}";
-
-    final Color accent;
-    if (completed) {
-      accent = const Color(0xFF16A085);
-    } else if (unlocked) {
-      accent = const Color(0xFFFFD54F);
-    } else {
-      accent = const Color(0xFF5A6A86);
-    }
+    final bestScore = GameData.journeyBestScore[index] ?? 0;
+    final stars = stateDifficulty(j.name);
+    final accent = completed
+        ? const Color(0xFF16A085)
+        : (isActive ? const Color(0xFFFFD54F) : const Color(0xFFFF9933));
 
     final statusText = completed
         ? "✅ Conquered"
         : isActive
             ? "🎯 In progress"
-            : unlocked
-                ? "▶ Ready"
-                : "🔒 Locked";
+            : "Open";
+    final buttonLabel = completed ? "REPLAY" : (isActive ? "CONTINUE" : "PLAY");
 
-    final buttonLabel = completed
-        ? "REPLAY"
-        : isActive
-            ? "CONTINUE"
-            : unlocked
-                ? "START"
-                : "LOCKED";
-
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: unlocked
-              ? [const Color(0xFF22314F), const Color(0xFF19253D)]
-              : [const Color(0xFF1A2233), const Color(0xFF151C2C)],
-        ),
-        border: Border.all(
-          color: accent.withValues(alpha: unlocked ? 0.45 : 0.18),
-          width: isActive ? 1.4 : 1,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.25),
-            blurRadius: 12,
-            offset: const Offset(0, 5),
+    return FadeTransition(
+      opacity: _cardEntrance(index),
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.10),
+          end: Offset.zero,
+        ).animate(_cardEntrance(index)),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: const [Color(0xFF22314F), Color(0xFF19253D)],
+            ),
+            border: Border.all(
+              color: accent.withValues(alpha: 0.45),
+              width: isActive ? 1.4 : 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 12,
+                offset: const Offset(0, 5),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(18),
-          onTap: () => _startJourney(index),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(20),
+              onTap: () => _startJourney(index),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Container(
-                      width: 52,
-                      height: 52,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: accent.withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: accent.withValues(alpha: 0.4),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 54,
+                          height: 54,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: accent.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(15),
+                            border: Border.all(
+                              color: accent.withValues(alpha: 0.4),
+                            ),
+                          ),
+                          child: Text(stateEmojis[j.name] ?? j.emoji,
+                              style: const TextStyle(fontSize: 27)),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                j.name.toUpperCase(),
+                                style: TextStyle(
+                                  color: accent.withValues(alpha: 0.8),
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 1.1,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                j.name,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                j.theme,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.55),
+                                  fontSize: 11,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          statusText,
+                          style: TextStyle(
+                            color: completed
+                                ? const Color(0xFF7BE0C5)
+                                : Colors.white.withValues(alpha: 0.6),
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        _statPill("📚", "15 Questions"),
+                        const SizedBox(width: 8),
+                        _starRow(stars),
+                        const Spacer(),
+                        Text(
+                          "$percent%",
+                          style: TextStyle(
+                            color: completed
+                                ? const Color(0xFF7BE0C5)
+                                : const Color(0xFFFFE082),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 7),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(5),
+                      child: LinearProgressIndicator(
+                        value: percent / 100.0,
+                        minHeight: 7,
+                        backgroundColor: Colors.white.withValues(alpha: 0.12),
+                        valueColor: AlwaysStoppedAnimation(
+                          completed
+                              ? const Color(0xFF16A085)
+                              : const Color(0xFF8A6B2A),
                         ),
                       ),
-                      child: Text(unlocked ? j.emoji : "🔒",
-                          style: const TextStyle(fontSize: 26)),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            prefix.toUpperCase(),
-                            style: TextStyle(
-                              color: accent.withValues(alpha: 0.75),
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1.1,
+                    const SizedBox(height: 9),
+                    Row(
+                      children: [
+                        _statPill("🏆", "Best $bestScore"),
+                        const Spacer(),
+                        Text(
+                          isActive
+                              ? "Furthest tile: ${GameData.currentTile}/$finishTile"
+                              : "Best tile: "
+                                  "${GameData.journeyBestTile[index] ?? 0}/$finishTile",
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.5),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Material(
+                          color: completed
+                              ? const Color(0xFF16A085)
+                              : const Color(0xFFFFD54F),
+                          borderRadius: BorderRadius.circular(20),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(20),
+                            onTap: () => _startJourney(index),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 15, vertical: 7),
+                              child: Text(
+                                buttonLabel,
+                                style: TextStyle(
+                                  color: completed
+                                      ? Colors.white
+                                      : const Color(0xFF3A2A08),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 0.6,
+                                ),
+                              ),
                             ),
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            j.name,
-                            style: TextStyle(
-                              color:
-                                  unlocked ? Colors.white : Colors.white54,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            j.theme,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.55),
-                              fontSize: 11,
-                              height: 1.35,
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Text(
-                      statusText,
-                      style: TextStyle(
-                        color:
-                            unlocked ? Colors.white : Colors.white38,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _challengeCard() {
+    final chIdx = indiaChallengeIndex;
+    final unlocked = GameData.indiaChallengeUnlocked;
+    final completed = GameData.completedJourneys.contains(chIdx);
+    final isActive = !completed &&
+        chIdx == GameData.activeJourney &&
+        GameData.hasActiveRun;
+    final percent = GameData.journeyPercent(chIdx);
+    final bestScore = GameData.journeyBestScore[chIdx] ?? 0;
+    final statesDone = GameData.completedJourneys.where(isStateJourney).length;
+
+    return FadeTransition(
+      opacity: _cardEntrance(indiaChallengeIndex),
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.10),
+          end: Offset.zero,
+        ).animate(_cardEntrance(indiaChallengeIndex)),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(22),
+gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFFFFC107), Color(0xFFB8860B)],
+            ),
+            border: Border.all(
+              color: const Color(0xFFFFF3C4).withValues(alpha: 0.7),
+              width: 1.4,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFFFB300).withValues(alpha: 0.35),
+                blurRadius: 22,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 54,
+                    height: 54,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(15),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.45),
                       ),
                     ),
+                    child: Text(unlocked ? "🇮🇳" : "🔒",
+                        style: const TextStyle(fontSize: 27)),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "PREMIUM · FINALE",
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.85),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          "INDIA CHALLENGE",
+                          style: TextStyle(
+                            color: Color(0xFF3A2500),
+                            fontSize: 17,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        const Text(
+                          "Mixed random questions from every state of Bharat.",
+                          style: TextStyle(
+                            color: Color(0xFF4A3200),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (!unlocked)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Color(0x552E1E00).withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.30),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.lock_rounded,
+                          color: Color(0xFF3A2500), size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          "Conquer all $indiaChallengeIndex states to unlock "
+                          "the ultimate Bharat test",
+                          style: const TextStyle(
+                            color: Color(0xFF3A2500),
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFE082),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Text(
+                          "$statesDone/$indiaChallengeIndex",
+                          style: const TextStyle(
+                            color: Color(0xFF3A2500),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else ...[
+                Row(
+                  children: [
+                    _statPill("📚", "$totalStateQuestions questions"),
+                    const SizedBox(width: 8),
+                    _starRow(3, color: const Color(0xFF4A3200)),
                     const Spacer(),
                     Text(
                       "$percent%",
-                      style: TextStyle(
-                        color: completed
-                            ? const Color(0xFF7BE0C5)
-                            : (unlocked
-                                ? const Color(0xFFFFE082)
-                                : Colors.white38),
+                      style: const TextStyle(
+                        color: Color(0xFF3A2500),
                         fontSize: 13,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 7),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(5),
                   child: LinearProgressIndicator(
                     value: percent / 100.0,
                     minHeight: 7,
-                    backgroundColor: Colors.white.withValues(alpha: 0.12),
-                    valueColor: AlwaysStoppedAnimation(
-                      completed
-                          ? const Color(0xFF16A085)
-                          : const Color(0xFFFFD54F),
-                    ),
+                    backgroundColor: Colors.white.withValues(alpha: 0.25),
+                    valueColor: const AlwaysStoppedAnimation(Color(0xFF3A2500)),
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 9),
                 Row(
                   children: [
-                    Expanded(
-                      child: Text(
-                        "Furthest tile: $bestTile/$finishTile · "
-                        "Squares seen: $seenCount",
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.5),
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                        ),
+                    _statPill("🏆", "Best $bestScore"),
+                    const Spacer(),
+                    Text(
+                      isActive
+                          ? "Furthest tile: ${GameData.currentTile}/$finishTile"
+                          : "Best tile: "
+                              "${GameData.journeyBestTile[chIdx] ?? 0}/$finishTile",
+                      style: const TextStyle(
+                        color: Color(0xFF4A3200),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
                     const SizedBox(width: 10),
                     Material(
-                      color: unlocked
-                          ? (completed
-                              ? const Color(0xFF16A085)
-                              : const Color(0xFFFFD54F))
-                          : const Color(0xFF2A3550),
+                      color: const Color(0xFF3A2500),
                       borderRadius: BorderRadius.circular(20),
                       child: InkWell(
                         borderRadius: BorderRadius.circular(20),
-                        onTap: () => _startJourney(index),
+                        onTap: () => _startJourney(chIdx),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 7),
+                              horizontal: 16, vertical: 7),
                           child: Text(
-                            buttonLabel,
-                            style: TextStyle(
-                              color: unlocked
-                                  ? (completed
-                                      ? Colors.white
-                                      : const Color(0xFF3A2A08))
-                                  : Colors.white38,
+                            completed
+                                ? "REPLAY"
+                                : (isActive ? "CONTINUE" : "PLAY"),
+                            style: const TextStyle(
+                              color: Color(0xFFFFE082),
                               fontSize: 11,
                               fontWeight: FontWeight.w900,
                               letterSpacing: 0.6,
@@ -477,7 +766,7 @@ class _JourneyScreenState extends State<JourneyScreen> {
                   ],
                 ),
               ],
-            ),
+            ],
           ),
         ),
       ),

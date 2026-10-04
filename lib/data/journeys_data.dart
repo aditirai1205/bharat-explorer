@@ -1,9 +1,11 @@
-/// Journey progression for the Snake-and-Ladder adventure.
+import 'india_states_data.dart';
+
+/// A playable stage in the Snake-and-Ladder adventure: one of the 28 Indian
+/// states, or the grand 🇮🇳 India Challenge finale.
 ///
-/// Six themed journeys, unlocked one at a time: finishing a journey unlocks
-/// the next. Each journey is a fresh run of the SAME board — the replay hook
-/// is collecting the full Passport, Heritage Badges, Monuments and Foods, and
-/// climbing the Explorer Rank ladder journey after journey.
+/// Each state keeps its OWN board progress and completion percentage. States
+/// are all open from the start (no sequential locks); the India Challenge is
+/// a premium final stage unlocked only after every state has been completed.
 class Journey {
   final String name;
   final String emoji;
@@ -22,52 +24,96 @@ class Journey {
   String get displayName => '$emoji  $name';
 }
 
-const int totalJourneys = 6;
+/// The 8 non-state locations inside [indiaStates] (4 union territories and
+/// 4 heritage cities) that are drawn on the map but are NOT playable as a
+/// state journey. Every playable card is one of the 28 states of Bharat.
+const Set<String> nonStateLocations = {
+  "Jammu & Kashmir",
+  "Ladakh",
+  "Chandigarh",
+  "Delhi",
+  "Mumbai",
+  "Jaipur",
+  "Agra",
+  "Kolkata",
+};
 
-const List<Journey> journeys = [
-  Journey(
-    name: "Northern India",
-    emoji: "🏔️",
-    theme: "Snow peaks, sacred rivers and the valleys of the Himalaya.",
-    region: "North India",
-    completionPoints: 30,
-  ),
-  Journey(
-    name: "Western India",
-    emoji: "🏜️",
-    theme: "Golden deserts, spice coasts and gateway cities.",
-    region: "West India",
-    completionPoints: 40,
-  ),
-  Journey(
-    name: "Southern India",
-    emoji: "🛕",
-    theme: "Ancient temples, backwaters and fragrant spice trails.",
-    region: "South India",
-    completionPoints: 50,
-  ),
-  Journey(
-    name: "Eastern India",
-    emoji: "🌊",
-    theme: "Mighty rivers, heritage towns and flavours of the East.",
-    region: "East India",
-    completionPoints: 60,
-  ),
-  Journey(
-    name: "North-East India",
-    emoji: "🌿",
-    theme: "The Seven Sisters — green hills, jungles and proud tribes.",
-    region: "North-East India",
-    completionPoints: 70,
-  ),
-  Journey(
-    name: "Incredible India",
-    emoji: "👑",
-    theme: "Every corner of Bharat in one grand, legendary ride.",
-    region: "All India",
-    completionPoints: 100,
-  ),
-];
+/// Small representative emoji for each of the 28 playable states.
+const Map<String, String> stateEmojis = {
+  "Andhra Pradesh": "🦚",
+  "Arunachal Pradesh": "🏔️",
+  "Assam": "🐘",
+  "Bihar": "🛕",
+  "Chhattisgarh": "🌳",
+  "Goa": "🏖️",
+  "Gujarat": "🦁",
+  "Haryana": "🌾",
+  "Himachal Pradesh": "🏞️",
+  "Jharkhand": "⛏️",
+  "Karnataka": "🐘",
+  "Kerala": "⛵",
+  "Madhya Pradesh": "🐆",
+  "Maharashtra": "🚂",
+  "Manipur": "💃",
+  "Meghalaya": "☔",
+  "Mizoram": "🌿",
+  "Nagaland": "🛡️",
+  "Odisha": "🎭",
+  "Punjab": "🏵️",
+  "Rajasthan": "🏰",
+  "Sikkim": "🧘",
+  "Tamil Nadu": "🌺",
+  "Telangana": "🏯",
+  "Tripura": "🛕",
+  "Uttar Pradesh": "🕌",
+  "Uttarakhand": "⛰️",
+  "West Bengal": "🐯",
+};
+
+/// The 28 Indian states, sorted alphabetically for the State Selection page.
+List<IndiaState> get playableStates {
+  final states = indiaStates
+      .where((s) => !nonStateLocations.contains(s.name))
+      .toList()
+    ..sort((a, b) => a.name.compareTo(b.name));
+  return states;
+}
+
+/// Every journey in play order: the 28 state stages followed by the single
+/// 🇮🇳 India Challenge finale at index [journeys.length] - 1.
+final List<Journey> journeys = _buildJourneys();
+
+/// The premium finale — mixed questions from every state, unlocked once all
+/// 28 states are completed.
+const Journey indiaChallenge = Journey(
+  name: "India Challenge",
+  emoji: "🇮🇳",
+  theme: "Mixed random questions from every state of Bharat.",
+  region: "All States",
+  completionPoints: 100,
+);
+
+List<Journey> _buildJourneys() {
+  return [
+    for (final s in playableStates)
+      Journey(
+        name: s.name,
+        emoji: stateEmojis[s.name] ?? "🗺️",
+        theme: "${s.capital} · ${s.food}",
+        region: s.region,
+        completionPoints: 25,
+      ),
+    indiaChallenge,
+  ];
+}
+
+/// Index of the premium [indiaChallenge] stage (always the final journey).
+int get indiaChallengeIndex => journeys.length - 1;
+
+/// True when [index] is a regular state stage (not the India Challenge).
+bool isStateJourney(int index) => index >= 0 && index < journeys.length - 1;
+
+int get totalJourneys => journeys.length;
 
 /// A random daily mission. Progress for the active mission is accumulated by
 /// gameplay hooks (state tiles, quiz wins, mini-games, badges, monuments,

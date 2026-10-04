@@ -109,6 +109,21 @@ class GameData {
     _markChange();
   }
 
+  /// Lifetime experience points (lifetime, persisted). Fed by Green-tile
+  /// "Collect XP" rewards; separate from [score] and the lifetime rank ladder
+  /// in [totalScore].
+  static int _xp = 0;
+  static int get xp => _xp;
+  static set xp(int value) {
+    _xp = value < 0 ? 0 : value;
+    _markChange();
+  }
+
+  static void addXp(int amount) {
+    if (amount <= 0) return;
+    xp = _xp + amount;
+  }
+
   /// Per-journey live counters (reset by [resetJourney], persisted by
   /// [ProgressStore] so they survive route pushes and app restarts). Each
   /// change triggers the auto-save hook, so every dice roll, quiz, challenge,
@@ -245,25 +260,43 @@ class GameData {
   /// events and surprises (lifetime, persisted).
   static final Set<String> explorerMedals = {};
 
-  /// Journey progression (all persisted).
-  static Set<int> unlockedJourneys = {0};
+  /// Journey progression (all persisted). Every state stage (all but the
+  /// final India Challenge) starts unlocked — the explorer may play any state
+  /// in any order. The India Challenge index is added only once its gate
+  /// ([indiaChallengeUnlocked]) is met.
+  static Set<int> unlockedJourneys = {
+    for (var i = 0; i < journeys.length - 1; i++) i,
+  };
   static Set<int> completedJourneys = AutoSaveSet<int>();
   static int activeJourney = 0;
   static bool legendUnlocked = false;
 
   /// Per-journey board progress (lifetime): the furthest tile reached and the
   /// distinct square indices ever landed on while playing each journey. This
-  /// is what the Journey Progression page turns into a completion percentage.
+  /// is what the State Selection page turns into a completion percentage.
   static final Map<int, int> journeyBestTile = {};
   static final Map<int, List<int>> journeySeenTiles = {};
 
+  /// Best run score banked on each journey (lifetime, persisted) — shown as
+  /// the "Best score" stat on every state card.
+  static final Map<int, int> journeyBestScore = {};
+
+  /// True once every one of the 28 states has been conquered — the gate that
+  /// opens the 🇮🇳 India Challenge stage.
+  static bool get indiaChallengeUnlocked =>
+      completedJourneys.length >= journeys.length - 1;
+
   /// Records a landed square for the ACTIVE journey. Keeps the furthest tile
-  /// reached and a de-duplicated list of every square ever stepped on.
+  /// reached, a de-duplicated list of every square ever stepped on, and the
+  /// best run score banked so far.
   static void recordJourneyTile(int tile) {
     final seen = journeySeenTiles.putIfAbsent(activeJourney, () => []);
     if (!seen.contains(tile)) seen.add(tile);
     final best = journeyBestTile[activeJourney] ?? 0;
     if (tile > best) journeyBestTile[activeJourney] = tile;
+    if (score > (journeyBestScore[activeJourney] ?? 0)) {
+      journeyBestScore[activeJourney] = score;
+    }
     // The resting square IS the current tile; keep it persisted for resume.
     currentTile = tile;
     _markChange();
@@ -382,6 +415,7 @@ class GameData {
       totalScore = 0;
       journeysCompleted = 0;
       coins = 0;
+      xp = 0;
       rolls = 0;
       snakesUsed = 0;
       laddersUsed = 0;
@@ -405,12 +439,15 @@ class GameData {
       foods.clear();
       festivalCards.clear();
       explorerMedals.clear();
-      unlockedJourneys = {0};
+      unlockedJourneys = {
+        for (var i = 0; i < journeys.length - 1; i++) i,
+      };
       completedJourneys.clear();
       activeJourney = 0;
       legendUnlocked = false;
       journeyBestTile.clear();
       journeySeenTiles.clear();
+      journeyBestScore.clear();
       runVisitedStates.clear();
       usedQuestions.clear();
       lastQuestionType = "None";
@@ -524,6 +561,9 @@ class GameData {
     score += journeys[idx].completionPoints;
     totalScore += score;
     journeysCompleted++;
+    if (score > (journeyBestScore[idx] ?? 0)) {
+      journeyBestScore[idx] = score;
+    }
     if (idx + 1 < journeys.length) {
       if (firstTime) activeJourney = idx + 1;
       unlockedJourneys.add(idx + 1);
@@ -562,9 +602,9 @@ class GameData {
       stageRewardClaimed.length == tourStages.length &&
       stageRewardClaimed.every((done) => done);
 
-  /// Picks a journey from the Journey Progression page and starts a board run.
-  /// Locked journeys are rejected (keeps the unlock chain: Journey N can only
-  /// be played after Journey N-1 is complete).
+  /// Picks a journey from the State Selection page and starts a board run.
+  /// Every state stage is open from the start; only the premium India
+  /// Challenge stage is gated behind completing all 28 states.
   ///
   /// Resume behaviour: choosing the SAME journey while a run is mid-way
   /// simply continues it (the board opens on the saved [currentTile] with the
@@ -572,7 +612,9 @@ class GameData {
   /// run in progress — starts a completely fresh run from tile 1.
   static bool startJourney(int index) {
     if (index < 0 || index >= journeys.length) return false;
-    if (!unlockedJourneys.contains(index)) return false;
+    if (index == journeys.length - 1 && !indiaChallengeUnlocked) {
+      return false;
+    }
     if (index != activeJourney || !hasActiveRun) {
       activeJourney = index;
       resetJourney();
@@ -651,6 +693,7 @@ class GameData {
       'visitedStates': visitedStates.toList(),
       'journeysCompleted': journeysCompleted,
       'coins': coins,
+      'xp': xp,
       'rolls': rolls,
       'snakesUsed': snakesUsed,
       'laddersUsed': laddersUsed,
@@ -686,6 +729,9 @@ class GameData {
       'journeySeenTiles': {
         for (final e in journeySeenTiles.entries)
           '${e.key}': List<int>.from(e.value),
+      },
+      'journeyBestScore': {
+        for (final e in journeyBestScore.entries) '${e.key}': e.value,
       },
       'myPlayerName': playerName,
       'avatarId': avatarId,
@@ -723,6 +769,7 @@ class GameData {
               const []);
       journeysCompleted = json['journeysCompleted'] as int? ?? 0;
       coins = json['coins'] as int? ?? 0;
+      xp = json['xp'] as int? ?? 0;
       rolls = json['rolls'] as int? ?? 0;
       snakesUsed = json['snakesUsed'] as int? ?? 0;
       laddersUsed = json['laddersUsed'] as int? ?? 0;
@@ -784,11 +831,19 @@ class GameData {
       unlockedJourneys = (json['unlockedJourneys'] as List?)
               ?.map((e) => e as int)
               .toSet() ??
-          {0};
+          {
+            for (var i = 0; i < journeys.length - 1; i++) i,
+          };
       completedJourneys.clear();
       completedJourneys.addAll(
           (json['completedJourneys'] as List?)?.map((e) => e as int) ??
               const <int>[]);
+      // Every state stage is always open; the challenge unlocks with it.
+      for (var i = 0; i < journeys.length; i++) {
+        if (i < journeys.length - 1 || completedJourneys.contains(i)) {
+          unlockedJourneys.add(i);
+        }
+      }
       activeJourney = json['activeJourney'] as int? ?? 0;
       legendUnlocked = json['legendUnlocked'] as bool? ?? false;
       journeyBestTile.clear();
@@ -798,6 +853,9 @@ class GameData {
       (json['journeySeenTiles'] as Map<String, dynamic>?)
           ?.forEach((k, v) => journeySeenTiles[int.parse(k)] =
               (v as List).map((e) => e as int).toList());
+      journeyBestScore.clear();
+      (json['journeyBestScore'] as Map<String, dynamic>?)
+          ?.forEach((k, v) => journeyBestScore[int.parse(k)] = v as int);
       playerName = json['myPlayerName'] as String? ?? "";
       avatarId = json['avatarId'] as String? ?? "boy_kurta";
       passportRecords.clear();

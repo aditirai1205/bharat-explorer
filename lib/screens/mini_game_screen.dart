@@ -42,7 +42,13 @@ enum _MiniGameMode {
 /// State ↔ Capital Memory Card grid. Rewards shrink with every retry and the
 /// player can always retry until the game is cleared.
 class MiniGameScreen extends StatefulWidget {
-  const MiniGameScreen({super.key});
+  /// Optional forced game index (0..5) in [_MiniGameMode] order:
+  /// 0 State Puzzle · 1 Find the State · 2 Match the Food ·
+  /// 3 Festival Match · 4 Spot the Monument · 5 State↔Capital Memory Card.
+  /// Null picks a random game, as before.
+  final int? mode;
+
+  const MiniGameScreen({super.key, this.mode});
 
   @override
   State<MiniGameScreen> createState() => _MiniGameScreenState();
@@ -54,8 +60,11 @@ class _MiniGameScreenState extends State<MiniGameScreen> {
   @override
   void initState() {
     super.initState();
-    _mode =
-        _MiniGameMode.values[math.Random().nextInt(_MiniGameMode.values.length)];
+    final modes = _MiniGameMode.values;
+    final chosen = widget.mode == null
+        ? modes[math.Random().nextInt(modes.length)]
+        : modes[widget.mode!.clamp(0, modes.length - 1)];
+    _mode = chosen;
   }
 
   void _close(MiniGameResult result) => Navigator.of(context).pop(result);
